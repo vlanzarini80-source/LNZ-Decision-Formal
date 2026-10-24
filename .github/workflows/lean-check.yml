@@ -39,5 +39,17 @@ jobs:
       - name: Build project
         run: lake build
 
-      - name: Check source
+      - name: Check main source
         run: lake env lean LNZDecisionFormal.lean
+
+      - name: Verify objective lower bound theorem
+        shell: bash
+        run: |
+          set -euo pipefail
+          lake env lean LNZLowerBound.lean 2>&1 | tee lean-lower-bound.log
+          grep -F 'LNZ.objective_lower_bound' lean-lower-bound.log
+          grep -F 'axioms' lean-lower-bound.log
+          if grep -E 'sorryAx|^error:' lean-lower-bound.log; then
+            echo "Formal verification rejected"
+            exit 1
+          fi
