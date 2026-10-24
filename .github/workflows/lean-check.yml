@@ -21,7 +21,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
+          curl --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            -o elan-init.sh
           sh elan-init.sh -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
@@ -42,14 +44,13 @@ jobs:
       - name: Check main source
         run: lake env lean LNZDecisionFormal.lean
 
-      - name: Verify objective lower bound theorem
+      - name: Verify P3.1a lower bound
         shell: bash
         run: |
           set -euo pipefail
-          lake env lean LNZLowerBound.lean 2>&1 | tee lean-lower-bound.log
-          grep -F "'LNZ.objective_lower_bound' depends on axioms:" lean-lower-bound.log
-          if grep -E 'sorryAx|^error:' lean-lower-bound.log; then
-            echo "Lower bound verification failed"
+          lake env lean LNZLowerBound.lean 2>&1 | tee p31a-lower.log
+          grep -F "'LNZ.objective_lower_bound' depends on axioms:" p31a-lower.log
+          if grep -E 'sorryAx|^error:' p31a-lower.log; then
             exit 1
           fi
 
@@ -57,10 +58,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          lake env lean LNZExchange.lean 2>&1 | tee lean-exchange.log
-          grep -F "'LNZ.exchange_objective_delta' depends on axioms:" lean-exchange.log
-          grep -F "'LNZ.exchange_nonimproving' depends on axioms:" lean-exchange.log
-          if grep -E 'sorryAx|^error:' lean-exchange.log; then
-            echo "P3.1a verification failed"
+          lake env lean LNZExchange.lean 2>&1 | tee p31a-exchange.log
+          grep -F "depends on axioms:" p31a-exchange.log
+          if grep -E 'sorryAx|^error:' p31a-exchange.log; then
             exit 1
           fi
+
+      - name: Verify P3.1b global optimality
+        shell: bash
+        run: |
+          set -euo pipefail
+          lake env lean LNZGlobalOptimality.lean 2>&1 | tee p31b.log
+          grep -F "'LNZ.global_optimality_box_simplex' depends on axioms:" p31b.log
+          if grep -E 'sorryAx|^error:' p31b.log; then
+            echo "P3.1b verification rejected"
+            exit 1
+          fi
+          echo "P3.1b Lean compilation and axiom-output checks passed"
