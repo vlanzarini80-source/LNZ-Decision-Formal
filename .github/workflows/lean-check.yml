@@ -74,4 +74,20 @@ jobs:
             echo "P3.1b verification rejected"
             exit 1
           fi
-          echo "P3.1b Lean compilation and axiom-output checks passed"
+          echo "P3.1b verification passed"
+
+      - name: Verify P3.2 certificate bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          lake env lean LNZCertificateBridge.lean 2>&1 | tee p32.log
+
+          grep -F "'LNZ.certified_coordinate_exchange' depends on axioms:" p32.log
+          grep -F "'LNZ.certified_global_optimality' depends on axioms:" p32.log
+
+          if grep -E 'sorryAx|^error:' p32.log; then
+            echo "P3.2 verification rejected"
+            exit 1
+          fi
+
+          echo "P3.2 compilation and axiom-output checks passed"
