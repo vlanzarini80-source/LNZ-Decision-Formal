@@ -17,9 +17,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Lean toolchain
+      - name: Install Lean without automatic setup
         uses: leanprover/lean-action@v1
         with:
+          auto-config: false
           build: false
           use-mathlib-cache: false
 
