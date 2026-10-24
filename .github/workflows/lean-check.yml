@@ -1,0 +1,31 @@
+
+name: LNZ Lean Verification
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lean-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Lean and Lake
+        uses: leanprover/lean-action@v1
+        with:
+          build: true
+
+      - name: Print Lean version
+        run: |
+          lake env lean --version
+
+      - name: Check source
+        run: |
+          lake env lean LNZDecisionFormal.lean
