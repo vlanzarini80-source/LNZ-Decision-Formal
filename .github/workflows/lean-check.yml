@@ -28,21 +28,35 @@ jobs:
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
       - name: Check Lean toolchain
+        shell: bash
         run: |
+          set -euo pipefail
           lean --version
           lake --version
 
       - name: Generate dependency manifest
-        run: lake update
+        shell: bash
+        run: |
+          set -euo pipefail
+          lake update
 
       - name: Download mathlib cache
-        run: lake exe cache get
+        shell: bash
+        run: |
+          set -euo pipefail
+          lake exe cache get
 
       - name: Build project
-        run: lake build
+        shell: bash
+        run: |
+          set -euo pipefail
+          lake build
 
       - name: Check main source
-        run: lake env lean LNZDecisionFormal.lean
+        shell: bash
+        run: |
+          set -euo pipefail
+          lake env lean LNZDecisionFormal.lean
 
       - name: Verify P3.1a lower bound
         shell: bash
@@ -50,9 +64,13 @@ jobs:
           set -euo pipefail
           lake env lean LNZLowerBound.lean 2>&1 | tee p31a-lower.log
           grep -F "'LNZ.objective_lower_bound' depends on axioms:" p31a-lower.log
+
           if grep -E 'sorryAx|^error:' p31a-lower.log; then
+            echo "P3.1a lower bound rejected"
             exit 1
           fi
+
+          echo "P3.1a lower bound checks passed"
 
       - name: Verify P3.1a exchange lemmas
         shell: bash
@@ -60,9 +78,13 @@ jobs:
           set -euo pipefail
           lake env lean LNZExchange.lean 2>&1 | tee p31a-exchange.log
           grep -F "depends on axioms:" p31a-exchange.log
+
           if grep -E 'sorryAx|^error:' p31a-exchange.log; then
+            echo "P3.1a exchange rejected"
             exit 1
           fi
+
+          echo "P3.1a exchange checks passed"
 
       - name: Verify P3.1b global optimality
         shell: bash
@@ -70,17 +92,19 @@ jobs:
           set -euo pipefail
           lake env lean LNZGlobalOptimality.lean 2>&1 | tee p31b.log
           grep -F "'LNZ.global_optimality_box_simplex' depends on axioms:" p31b.log
+
           if grep -E 'sorryAx|^error:' p31b.log; then
             echo "P3.1b verification rejected"
             exit 1
           fi
+
           echo "P3.1b verification passed"
 
       - name: Verify P3.2 certificate bridge
         shell: bash
         run: |
           set -euo pipefail
-          lake env lean LNZCertificateBridge.lean 2>&1 | tee p32.log
+          lake env lean -o LNZCertificateBridge.olean LNZCertificateBridge.lean 2>&1 | tee p32.log
 
           grep -F "'LNZ.certified_coordinate_exchange' depends on axioms:" p32.log
           grep -F "'LNZ.certified_global_optimality' depends on axioms:" p32.log
@@ -91,3 +115,21 @@ jobs:
           fi
 
           echo "P3.2 compilation and axiom-output checks passed"
+
+      - name: Verify P3.3 certificate payload
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -s LNZCertificatePayloadP33.lean
+
+          lake env lean LNZCertificatePayloadP33.lean 2>&1 | tee p33.log
+
+          grep -F "'LNZ.valid_box_certificate_optimal' depends on axioms:" p33.log
+
+          if grep -E 'sorryAx|^error:' p33.log; then
+            echo "P3.3 verification rejected"
+            exit 1
+          fi
+
+          echo "P3.3 compilation and basic axiom checks passed"
