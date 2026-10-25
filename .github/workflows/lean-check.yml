@@ -70,8 +70,6 @@ jobs:
             exit 1
           fi
 
-          echo "P3.1a lower bound checks passed"
-
       - name: Verify P3.1a exchange lemmas
         shell: bash
         run: |
@@ -83,8 +81,6 @@ jobs:
             echo "P3.1a exchange rejected"
             exit 1
           fi
-
-          echo "P3.1a exchange checks passed"
 
       - name: Verify P3.1b global optimality
         shell: bash
@@ -98,13 +94,17 @@ jobs:
             exit 1
           fi
 
-          echo "P3.1b verification passed"
-
       - name: Verify P3.2 certificate bridge
         shell: bash
         run: |
           set -euo pipefail
-          lake env lean -o LNZCertificateBridge.olean LNZCertificateBridge.lean 2>&1 | tee p32.log
+
+          mkdir -p .lake/build/lib/lean
+
+          lake env lean \
+            -o .lake/build/lib/lean/LNZCertificateBridge.olean \
+            LNZCertificateBridge.lean \
+            2>&1 | tee p32.log
 
           grep -F "'LNZ.certified_coordinate_exchange' depends on axioms:" p32.log
           grep -F "'LNZ.certified_global_optimality' depends on axioms:" p32.log
@@ -114,7 +114,7 @@ jobs:
             exit 1
           fi
 
-          echo "P3.2 compilation and axiom-output checks passed"
+          test -s .lake/build/lib/lean/LNZCertificateBridge.olean
 
       - name: Verify P3.3 certificate payload
         shell: bash
@@ -122,8 +122,11 @@ jobs:
           set -euo pipefail
 
           test -s LNZCertificatePayloadP33.lean
+          test -s .lake/build/lib/lean/LNZCertificateBridge.olean
 
-          lake env lean LNZCertificatePayloadP33.lean 2>&1 | tee p33.log
+          lake env lean \
+            LNZCertificatePayloadP33.lean \
+            2>&1 | tee p33.log
 
           grep -F "'LNZ.valid_box_certificate_optimal' depends on axioms:" p33.log
 
