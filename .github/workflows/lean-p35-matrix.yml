@@ -7,50 +7,118 @@ on:
     branches:
       - test/p34-json-lean-bridge
     paths:
-      - 'p35_matrix.py'
       - 'lnz_p34d.py'
+      - 'p35_matrix.py'
       - 'verify_p35.sh'
       - 'LNZ*.lean'
+      - 'P35*.lean'
       - 'lean-toolchain'
       - 'lakefile.toml'
+      - 'lake-manifest.json'
       - '.github/workflows/lean-p35-matrix.yml'
+
+permissions:
+  contents: read
 
 jobs:
   verify-p35:
+    name: Verify P3.5 generated Lean proofs
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
+    timeout-minutes: 45
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: leanprover/lean-action@v1
-        with:
-          use-mathlib-cache: true
-          build: false
-      - name: Versions and provenance
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install elan
+        shell: bash
         run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            -o elan-init.sh
+          sh elan-init.sh -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Show environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "COMMIT:"
           git rev-parse HEAD
+          echo "BRANCH:"
+          git branch --show-current
+          echo "PYTHON:"
           python3 --version
-          lake --version
+          echo "LEAN:"
           lean --version
-      - name: Generate and compile every instance
+          echo "LAKE:"
+          lake --version
+          echo "TOOLCHAIN:"
+          cat lean-toolchain
+
+      - name: Prepare Mathlib dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          lake update
+          lake exe cache get
+          lake build
+
+      - name: Verify required P3.5 files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f lnz_p34d.py
+          test -f p35_matrix.py
+          test -f verify_p35.sh
+          test -f LNZCertificatePayloadP33.lean
+          echo "P35_REQUIRED_FILES_PRESENT"
+
+      - name: Generate and compile P3.5 instances
         shell: bash
         run: |
           set -euo pipefail
           bash verify_p35.sh 2>&1 | tee p35_ci.log
-          if grep -E 'sorryAx' p35_ci.log; then
-            echo 'FORBIDDEN_SORRY_AXIOM'
+
+      - name: Check compilation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f p35_ci.log
+
+          if grep -E 'sorryAx|declaration uses sorry' \
+            p35_ci.log; then
+            echo "FAIL: sorry detected"
             exit 1
           fi
-          test "$(grep -c '^LEAN_CHECK p35_generated/P35_' p35_ci.log)" -eq 7
-          grep -Fx 'P35_LEAN_COMPILE_ALL_PASS' p35_ci.log
-      - name: Archive logs and generated proofs
+
+          COUNT="$(
+            grep -c '^LEAN_CHECK p35_generated/P35_' \
+              p35_ci.log || true
+          )"
+
+          echo "LEAN_CHECK_COUNT=$COUNT"
+
+          if [ "$COUNT" -ne 7 ]; then
+            echo "FAIL: expected seven Lean checks"
+            exit 1
+          fi
+
+          grep -Fx \
+            'P35_LEAN_COMPILE_ALL_PASS' \
+            p35_ci.log
+
+          echo "P35_CI_CHECKS_PASS"
+
+      - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: p35-lean-evidence
+          name: lnz-p35-lean-evidence
           path: |
             p35_ci.log
             p35_generated/*.lean
           if-no-files-found: warn
-  
+          retention-days: 30
