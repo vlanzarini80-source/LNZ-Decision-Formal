@@ -1,0 +1,56 @@
+
+name: LNZ P3.5 Lean Matrix
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - test/p34-json-lean-bridge
+    paths:
+      - 'p35_matrix.py'
+      - 'lnz_p34d.py'
+      - 'verify_p35.sh'
+      - 'LNZ*.lean'
+      - 'lean-toolchain'
+      - 'lakefile.toml'
+      - '.github/workflows/lean-p35-matrix.yml'
+
+jobs:
+  verify-p35:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leanprover/lean-action@v1
+        with:
+          use-mathlib-cache: true
+          build: false
+      - name: Versions and provenance
+        run: |
+          git rev-parse HEAD
+          python3 --version
+          lake --version
+          lean --version
+      - name: Generate and compile every instance
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash verify_p35.sh 2>&1 | tee p35_ci.log
+          if grep -E 'sorryAx' p35_ci.log; then
+            echo 'FORBIDDEN_SORRY_AXIOM'
+            exit 1
+          fi
+          test "$(grep -c '^LEAN_CHECK p35_generated/P35_' p35_ci.log)" -eq 7
+          grep -Fx 'P35_LEAN_COMPILE_ALL_PASS' p35_ci.log
+      - name: Archive logs and generated proofs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p35-lean-evidence
+          path: |
+            p35_ci.log
+            p35_generated/*.lean
+          if-no-files-found: warn
+  
