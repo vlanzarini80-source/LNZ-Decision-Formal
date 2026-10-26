@@ -11,90 +11,142 @@ on:
 
 jobs:
   lean-check:
+    name: lean-check
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install elan
-        shell: bash
         run: |
           set -euo pipefail
-          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
-            | sh -s -- -y --default-toolchain none
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
+          sh elan-init.sh -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
       - name: Check Lean toolchain
-        shell: bash
         run: |
           set -euo pipefail
           cat lean-toolchain
-          grep -qx 'leanprover/lean4:v4.24.0' lean-toolchain
+          grep -Fxq "leanprover/lean4:v4.24.0" lean-toolchain
           lake --version
           lean --version
 
       - name: Resolve dependencies
-        shell: bash
         run: |
           set -euo pipefail
-          if [ ! -f lake-manifest.json ]; then
-            lake update
-          fi
+          lake update
 
       - name: Download mathlib cache
-        shell: bash
         run: |
           set -euo pipefail
           lake exe cache get
 
       - name: Build project
-        shell: bash
         run: |
           set -euo pipefail
           lake build
 
-      - name: Check main source
-        shell: bash
+      - name: Verify required source files
+        run: |
+          set -euo pipefail
+          for file in \
+            LNZDecisionFormal.lean \
+            LNZLowerBound.lean \
+            LNZExchange.lean \
+            LNZGlobalOptimality.lean \
+            LNZCertificateBridge.lean \
+            LNZCertificatePayloadP33.lean \
+            P34Generated.lean
+          do
+            test -s "$file" || {
+              echo "::error::Missing or empty: $file"
+              exit 1
+            }
+          done
+
+      - name: Verify main source
         run: |
           set -euo pipefail
           lake env lean LNZDecisionFormal.lean
 
-      - name: Verify P3.1a lower bound
-        shell: bash
+      - name: Compile Lean dependency chain
         run: |
           set -euo pipefail
-          lake env lean LNZLowerBound.lean
 
-      - name: Verify P3.1a exchange lemmas
-        shell: bash
-        run: |
-          set -euo pipefail
-          lake env lean LNZExchange.lean
+          export LEAN_PATH=".:${LEAN_PATH:-}"
 
-      - name: Verify P3.1b global optimality
-        shell: bash
-        run: |
-          set -euo pipefail
-          lake env lean LNZGlobalOptimality.lean
+          lake env lean -o LNZLowerBound.olean LNZLowerBound.lean
 
-      - name: Verify P3.2 certificate bridge
-        shell: bash
-        run: |
-          set -euo pipefail
-          lake env lean LNZCertificateBridge.lean
+          lake env lean -o LNZExchange.olean LNZExchange.lean
+
+          lake env lean -o LNZGlobalOptimality.olean LNZGlobalOptimality.lean
+
+          lake env lean -o LNZCertificateBridge.olean LNZCertificateBridge.lean
+
+          lake env lean -o LNZCertificatePayloadP33.olean LNZCertificatePayloadP33.lean
+
+          for module in \
+            LNZLowerBound \
+            LNZExchange \
+            LNZGlobalOptimality \
+            LNZCertificateBridge \
+            LNZCertificatePayloadP33
+          do
+            test -s "$module.olean" || {
+              echo "::error::Missing compiled module: $module"
+              exit 1
+            }
+          done
 
       - name: Verify P3.3 certificate payload
-        shell: bash
         run: |
           set -euo pipefail
+          export LEAN_PATH=".:${LEAN_PATH:-}"
+
           lake env lean LNZCertificatePayloadP33.lean
 
+          echo "P3.3 compilation PASS"
+
       - name: Verify P3.4 generated certificate
-        if: github.ref == 'refs/heads/test/p34-json-lean-bridge'
-        shell: bash
         run: |
           set -euo pipefail
-          test -f P34Generated.lean
-          grep -Fq '#print axioms LNZ.p34_instance_optimal' P34Generated.lean
+          export LEAN_PATH=".:${LEAN_PATH:-}"
+
           lake env lean P34Generated.lean
+
+          echo "P3.4 generated certificate compilation PASS"
+
+      - name: Check P3.4 theorem and axioms
+        run: |
+          set -euo pipefail
+          export LEAN_PATH=".:${LEAN_PATH:-}"
+
+          cat > P34AxiomAudit.lean <<'EOF'
+          import P34Generated
+
+          #check LNZ.p34_instance_optimal
+          #print axioms LNZ.p34_instance_optimal
+          EOF
+
+          lake env lean -o P34Generated.olean P34Generated.lean
+          lake env lean P34AxiomAudit.lean 2>&1 | tee p34_axioms.log
+
+          if grep -Eq 'sorryAx|^.*depends on axioms:.*(sorryAx|[Uu]nsafe)' p34_axioms.log; then
+            echo "::error::Unacceptable axiom dependency"
+            exit 1
+          fi
+
+          echo "P3.4 axiom audit completed"
+
+      - name: Final verification
+        run: |
+          set -euo pipefail
+          echo "Required Lean files compiled."
+          echo "P3.3 and P3.4 checks executed."
+          echo "This does not certify the Python-to-Lean semantic bridge."
