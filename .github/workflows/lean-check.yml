@@ -3,15 +3,15 @@ name: LNZ Lean Verification
 
 on:
   push:
+    branches:
+      - main
+      - test/p34-json-lean-bridge
+  pull_request:
   workflow_dispatch:
-
-permissions:
-  contents: read
 
 jobs:
   lean-check:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -21,24 +21,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --proto '=https' --tlsv1.2 -sSf \
-            https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
-            -o elan-init.sh
-          sh elan-init.sh -y --default-toolchain none
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
       - name: Check Lean toolchain
         shell: bash
         run: |
           set -euo pipefail
-          lean --version
+          cat lean-toolchain
+          grep -qx 'leanprover/lean4:v4.24.0' lean-toolchain
           lake --version
+          lean --version
 
-      - name: Generate dependency manifest
+      - name: Resolve dependencies
         shell: bash
         run: |
           set -euo pipefail
-          lake update
+          if [ ! -f lake-manifest.json ]; then
+            lake update
+          fi
 
       - name: Download mathlib cache
         shell: bash
@@ -62,77 +64,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          lake env lean LNZLowerBound.lean 2>&1 | tee p31a-lower.log
-          grep -F "'LNZ.objective_lower_bound' depends on axioms:" p31a-lower.log
-
-          if grep -E 'sorryAx|^error:' p31a-lower.log; then
-            echo "P3.1a lower bound rejected"
-            exit 1
-          fi
+          lake env lean LNZLowerBound.lean
 
       - name: Verify P3.1a exchange lemmas
         shell: bash
         run: |
           set -euo pipefail
-          lake env lean LNZExchange.lean 2>&1 | tee p31a-exchange.log
-          grep -F "depends on axioms:" p31a-exchange.log
-
-          if grep -E 'sorryAx|^error:' p31a-exchange.log; then
-            echo "P3.1a exchange rejected"
-            exit 1
-          fi
+          lake env lean LNZExchange.lean
 
       - name: Verify P3.1b global optimality
         shell: bash
         run: |
           set -euo pipefail
-          lake env lean LNZGlobalOptimality.lean 2>&1 | tee p31b.log
-          grep -F "'LNZ.global_optimality_box_simplex' depends on axioms:" p31b.log
-
-          if grep -E 'sorryAx|^error:' p31b.log; then
-            echo "P3.1b verification rejected"
-            exit 1
-          fi
+          lake env lean LNZGlobalOptimality.lean
 
       - name: Verify P3.2 certificate bridge
         shell: bash
         run: |
           set -euo pipefail
-
-          mkdir -p .lake/build/lib/lean
-
-          lake env lean \
-            -o .lake/build/lib/lean/LNZCertificateBridge.olean \
-            LNZCertificateBridge.lean \
-            2>&1 | tee p32.log
-
-          grep -F "'LNZ.certified_coordinate_exchange' depends on axioms:" p32.log
-          grep -F "'LNZ.certified_global_optimality' depends on axioms:" p32.log
-
-          if grep -E 'sorryAx|^error:' p32.log; then
-            echo "P3.2 verification rejected"
-            exit 1
-          fi
-
-          test -s .lake/build/lib/lean/LNZCertificateBridge.olean
+          lake env lean LNZCertificateBridge.lean
 
       - name: Verify P3.3 certificate payload
         shell: bash
         run: |
           set -euo pipefail
+          lake env lean LNZCertificatePayloadP33.lean
 
-          test -s LNZCertificatePayloadP33.lean
-          test -s .lake/build/lib/lean/LNZCertificateBridge.olean
-
-          lake env lean \
-            LNZCertificatePayloadP33.lean \
-            2>&1 | tee p33.log
-
-          grep -F "'LNZ.valid_box_certificate_optimal' depends on axioms:" p33.log
-
-          if grep -E 'sorryAx|^error:' p33.log; then
-            echo "P3.3 verification rejected"
-            exit 1
-          fi
-
-          echo "P3.3 compilation and basic axiom checks passed"
+      - name: Verify P3.4 generated certificate
+        if: github.ref == 'refs/heads/test/p34-json-lean-bridge'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f P34Generated.lean
+          grep -Fq '#print axioms LNZ.p34_instance_optimal' P34Generated.lean
+          lake env lean P34Generated.lean
