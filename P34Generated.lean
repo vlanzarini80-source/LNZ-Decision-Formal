@@ -1,29 +1,57 @@
+
 import LNZCertificatePayloadP33
 
 namespace LNZ
 
 private def p34Cert : BoxCertificate 2 := {
-  lo := (fun i : Fin 2 =>
+  lo := fun i : Fin 2 =>
     (#[((0 : ℚ) / (1 : ℚ)),
-       ((0 : ℚ) / (1 : ℚ))])[i]),
-  hi := (fun i : Fin 2 =>
+       ((0 : ℚ) / (1 : ℚ))])[i]
+  hi := fun i : Fin 2 =>
     (#[((1 : ℚ) / (1 : ℚ)),
-       ((1 : ℚ) / (1 : ℚ))])[i]),
-  coeff := (fun i : Fin 2 =>
+       ((1 : ℚ) / (1 : ℚ))])[i]
+  coeff := fun i : Fin 2 =>
     (#[((1 : ℚ) / (1 : ℚ)),
-       ((2 : ℚ) / (1 : ℚ))])[i]),
-  witness := (fun i : Fin 2 =>
+       ((2 : ℚ) / (1 : ℚ))])[i]
+  witness := fun i : Fin 2 =>
     (#[((1 : ℚ) / (1 : ℚ)),
-       ((0 : ℚ) / (1 : ℚ))])[i]),
-  threshold := ((1 : ℚ) / (1 : ℚ)),
+       ((0 : ℚ) / (1 : ℚ))])[i]
+  threshold := ((1 : ℚ) / (1 : ℚ))
   objective := ((1 : ℚ) / (1 : ℚ))
 }
 
--- Candidate requiring Lean 4.24.0 verification.
+/--
+P3.4: Explicit validation of a concrete
+box-simplex certificate.
+
+No sorry.
+No new axioms.
+Optimality is not assumed.
+-/
 private theorem p34Valid :
     ValidBoxCertificate p34Cert := by
-  decide
+  unfold ValidBoxCertificate
+  constructor
+  · intro i
+    fin_cases i <;>
+      norm_num [p34Cert]
+  constructor
+  · norm_num [p34Cert, Fin.sum_univ_succ]
+  constructor
+  · norm_num [p34Cert, Fin.sum_univ_succ]
+  constructor
+  · intro i _
+    fin_cases i <;>
+      norm_num [p34Cert] at *
+  · intro i _
+    fin_cases i <;>
+      norm_num [p34Cert] at *
 
+/--
+P3.4: The concrete certificate proves
+global optimality for every feasible
+competitor.
+-/
 theorem p34_instance_optimal
     (v : Fin 2 → ℚ)
     (hvlo : ∀ i, p34Cert.lo i ≤ v i)
