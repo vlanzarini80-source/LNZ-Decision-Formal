@@ -1,5 +1,5 @@
 
-name: LNZ P3.5 Lean Matrix
+name: LNZ P3.7 Python Lean Matrix
 
 on:
   workflow_dispatch:
@@ -9,8 +9,11 @@ on:
     paths:
       - 'lnz_p34d.py'
       - 'p35_matrix.py'
+      - 'test_p36.py'
+      - 'test_p36_oracle.py'
       - 'verify_p35.sh'
       - 'LNZ*.lean'
+      - 'P34*.lean'
       - 'P35*.lean'
       - 'lean-toolchain'
       - 'lakefile.toml'
@@ -21,14 +24,46 @@ permissions:
   contents: read
 
 jobs:
-  verify-p35:
-    name: Verify P3.5 generated Lean proofs
+  verify-p37:
+    name: Verify Python and generated Lean certificates
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Verify required files
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in \
+            lnz_p34d.py \
+            p35_matrix.py \
+            test_p36.py \
+            test_p36_oracle.py \
+            verify_p35.sh \
+            LNZCertificatePayloadP33.lean
+          do
+            test -s "$file" || {
+              echo "::error::Missing or empty: $file"
+              exit 1
+            }
+          done
+          echo "P37_REQUIRED_FILES_PASS"
+
+      - name: Python robustness tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 --version
+          python3 -m unittest -v \
+            test_p36 \
+            test_p36_oracle \
+            2>&1 | tee p37_python.log
+
+          grep -Eq '^OK$' p37_python.log
+          echo "P37_PYTHON_TESTS_PASS"
 
       - name: Install elan
         shell: bash
@@ -40,24 +75,19 @@ jobs:
           sh elan-init.sh -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
-      - name: Show environment
+      - name: Verify environment
         shell: bash
         run: |
           set -euo pipefail
-          echo "COMMIT:"
           git rev-parse HEAD
-          echo "BRANCH:"
-          git branch --show-current
-          echo "PYTHON:"
-          python3 --version
-          echo "LEAN:"
-          lean --version
-          echo "LAKE:"
-          lake --version
-          echo "TOOLCHAIN:"
           cat lean-toolchain
+          grep -Fxq \
+            'leanprover/lean4:v4.24.0' \
+            lean-toolchain
+          lean --version
+          lake --version
 
-      - name: Prepare Mathlib dependencies
+      - name: Prepare Mathlib
         shell: bash
         run: |
           set -euo pipefail
@@ -65,60 +95,82 @@ jobs:
           lake exe cache get
           lake build
 
-      - name: Verify required P3.5 files
+      - name: Generate and compile certificates
         shell: bash
         run: |
           set -euo pipefail
-          test -f lnz_p34d.py
-          test -f p35_matrix.py
-          test -f verify_p35.sh
-          test -f LNZCertificatePayloadP33.lean
-          echo "P35_REQUIRED_FILES_PRESENT"
+          bash verify_p35.sh 2>&1 | tee p37_lean.log
 
-      - name: Generate and compile P3.5 instances
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash verify_p35.sh 2>&1 | tee p35_ci.log
-
-      - name: Check compilation evidence
+      - name: Audit generated Lean files
         shell: bash
         run: |
           set -euo pipefail
 
-          test -f p35_ci.log
-
-          if grep -E 'sorryAx|declaration uses sorry' \
-            p35_ci.log; then
-            echo "FAIL: sorry detected"
-            exit 1
-          fi
+          test -s p37_lean.log
 
           COUNT="$(
-            grep -c '^LEAN_CHECK p35_generated/P35_' \
-              p35_ci.log || true
+            find p35_generated \
+              -maxdepth 1 \
+              -type f \
+              -name 'P35_*.lean' \
+              | wc -l
           )"
 
-          echo "LEAN_CHECK_COUNT=$COUNT"
+          echo "GENERATED_LEAN_FILES=$COUNT"
 
           if [ "$COUNT" -ne 7 ]; then
-            echo "FAIL: expected seven Lean checks"
+            echo "::error::Expected seven generated Lean files"
             exit 1
           fi
 
-          grep -Fx \
+          CHECKS="$(
+            grep -c '^LEAN_CHECK p35_generated/P35_' \
+              p37_lean.log || true
+          )"
+
+          echo "LEAN_CHECK_COUNT=$CHECKS"
+
+          if [ "$CHECKS" -ne 7 ]; then
+            echo "::error::Expected seven Lean compilation checks"
+            exit 1
+          fi
+
+          if grep -En \
+            'sorryAx|declaration uses sorry' \
+            p37_lean.log p35_generated/*.lean; then
+            echo "::error::Sorry dependency detected"
+            exit 1
+          fi
+
+          grep -Fxq \
             'P35_LEAN_COMPILE_ALL_PASS' \
-            p35_ci.log
+            p37_lean.log
 
-          echo "P35_CI_CHECKS_PASS"
+          echo "P37_GENERATED_LEAN_PASS"
 
-      - name: Upload verification evidence
+      - name: Final verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fxq \
+            'P37_PYTHON_TESTS_PASS' \
+            <(echo P37_PYTHON_TESTS_PASS)
+          test -s p37_python.log
+          test -s p37_lean.log
+          echo "P37_CI_PASS"
+          echo "Seven generated Lean instances compiled."
+          echo "Python robustness tests executed."
+          echo "General Python-to-Lean semantic equivalence"
+          echo "is not yet formally proven."
+
+      - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: lnz-p35-lean-evidence
+          name: lnz-p37-verification-evidence
           path: |
-            p35_ci.log
+            p37_python.log
+            p37_lean.log
             p35_generated/*.lean
           if-no-files-found: warn
           retention-days: 30
