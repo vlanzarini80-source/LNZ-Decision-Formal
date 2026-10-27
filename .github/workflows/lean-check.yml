@@ -22,6 +22,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: P3.6 Python robustness and oracle tests
+        run: |
+          set -euo pipefail
+
+          python3 --version
+
+          for file in \
+            lnz_p34d.py \
+            test_p36.py \
+            test_p36_oracle.py
+          do
+            test -s "$file" || {
+              echo "::error::Missing or empty: $file"
+              exit 1
+            }
+          done
+
+          python3 -m unittest -v test_p36 test_p36_oracle
+
+          echo "P36_PYTHON_TESTS_PASS"
+
       - name: Install elan
         run: |
           set -euo pipefail
@@ -147,6 +168,8 @@ jobs:
       - name: Final verification
         run: |
           set -euo pipefail
+
+          echo "P36_PYTHON_TESTS_PASS"
           echo "Required Lean files compiled."
           echo "P3.3 and P3.4 checks executed."
-          echo "This does not certify the Python-to-Lean semantic bridge."
+          echo "Python-to-Lean semantic bridge remains a separate proof obligation."
