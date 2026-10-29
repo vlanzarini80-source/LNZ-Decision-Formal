@@ -54,9 +54,10 @@ jobs:
 
           python3 -m py_compile p39_semantic_audit.py
 
-          python3 p39_semantic_audit.py
+          python3 p39_semantic_audit.py --self-test
 
-          echo "P39_SCRIPT_EXECUTION_PASS"
+          echo "P39_SELF_TEST_PASS"
+          echo "P39_REAL_JSON_LEAN_AUDIT_NOT_YET_EXECUTED"
 
       - name: Install elan
         run: |
@@ -91,6 +92,7 @@ jobs:
       - name: Verify required source files
         run: |
           set -euo pipefail
+
           for file in \
             LNZDecisionFormal.lean \
             LNZLowerBound.lean \
@@ -181,7 +183,8 @@ jobs:
           set -euo pipefail
 
           echo "P36_PYTHON_TESTS_PASS"
-          echo "P39_SCRIPT_EXECUTION_PASS"
+          echo "P39_SELF_TEST_PASS"
           echo "Required Lean files compiled."
           echo "P3.3 and P3.4 checks executed."
+          echo "Real JSON-to-Lean semantic audit remains open."
           echo "Python-to-Lean semantic bridge remains a separate proof obligation."
