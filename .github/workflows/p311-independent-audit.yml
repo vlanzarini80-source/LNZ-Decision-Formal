@@ -1,0 +1,87 @@
+
+name: P311 Independent Mathematical Audit
+
+on:
+  push:
+    branches:
+      - test/p34-json-lean-bridge
+    paths:
+      - test_p311_independent.py
+      - lnz_p34d.py
+      - p310a_audit.py
+      - .github/workflows/p311-independent-audit.yml
+  workflow_dispatch:
+
+jobs:
+  independent-audit:
+    name: P3.11 independent Python audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify required files
+        run: |
+          set -euo pipefail
+
+          for file in \
+            test_p311_independent.py \
+            lnz_p34d.py \
+            p310a_audit.py
+          do
+            test -s "$file" || {
+              echo "::error::Missing file: $file"
+              exit 1
+            }
+          done
+
+      - name: Check Python syntax
+        run: |
+          set -euo pipefail
+
+          python3 -m py_compile \
+            test_p311_independent.py \
+            lnz_p34d.py \
+            p310a_audit.py
+
+      - name: Execute independent mathematical audit
+        run: |
+          set -euo pipefail
+
+          python3 -u test_p311_independent.py \
+            2>&1 | tee p311_audit.log
+
+          grep -Fxq \
+            "P311_BASELINE_PASS" \
+            p311_audit.log
+
+          for field in \
+            lo hi coeff witness threshold objective
+          do
+            grep -Fxq \
+              "P311_MUTATION_REJECTED: $field" \
+              p311_audit.log
+          done
+
+          grep -Fxq \
+            "P311_SUBOPTIMAL_REJECTED" \
+            p311_audit.log
+
+          grep -Fxq \
+            "P311_RANDOMIZED_PASS: 200" \
+            p311_audit.log
+
+          grep -Fxq \
+            "P311A_INDEPENDENT_AUDIT_PASS" \
+            p311_audit.log
+
+          echo "P311B_INDEPENDENT_AUDIT_PASS"
+
+      - name: Upload audit log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p311-independent-audit-log
+          path: p311_audit.log
+          if-no-files-found: warn
