@@ -1,0 +1,91 @@
+
+name: P310b JSON Lean Pipeline
+
+on:
+  push:
+    branches:
+      - test/p34-json-lean-bridge
+  workflow_dispatch:
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify required files
+        run: |
+          set -euo pipefail
+          for file in \
+            p310b_pipeline.py \
+            p310a_audit.py \
+            lnz_p34d.py \
+            LNZCertificateBridge.lean \
+            LNZCertificatePayloadP33.lean \
+            lean-toolchain
+          do
+            test -s "$file" || {
+              echo "::error::Missing or empty: $file"
+              exit 1
+            }
+          done
+
+      - name: Verify Python syntax
+        run: |
+          set -euo pipefail
+          python3 --version
+          python3 -m py_compile \
+            p310b_pipeline.py \
+            p310a_audit.py \
+            lnz_p34d.py
+
+      - name: Install elan
+        run: |
+          set -euo pipefail
+          curl -sSfL \
+            https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            -o elan-init.sh
+          sh elan-init.sh -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Check Lean toolchain
+        run: |
+          set -euo pipefail
+          grep -Fxq \
+            "leanprover/lean4:v4.24.0" \
+            lean-toolchain
+          lake --version
+          lean --version
+
+      - name: Resolve dependencies
+        run: |
+          set -euo pipefail
+          lake update
+          lake exe cache get
+          lake build
+
+      - name: Compile certificate dependencies
+        run: |
+          set -euo pipefail
+          export LEAN_PATH=".:${LEAN_PATH:-}"
+
+          lake env lean \
+            -o LNZCertificateBridge.olean \
+            LNZCertificateBridge.lean
+
+          lake env lean \
+            -o LNZCertificatePayloadP33.olean \
+            LNZCertificatePayloadP33.lean
+
+      - name: Execute P310b end-to-end test
+        run: |
+          set -euo pipefail
+          export LEAN_PATH=".:${LEAN_PATH:-}"
+          python3 p310b_pipeline.py
+
+      - name: Final status
+        run: |
+          set -euo pipefail
+          echo "P310B_WORKFLOW_COMPLETED"
