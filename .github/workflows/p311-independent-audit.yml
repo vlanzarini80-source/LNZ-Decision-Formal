@@ -73,10 +73,10 @@ jobs:
             p311_audit.log
 
           grep -Fxq \
-            "P311A_INDEPENDENT_AUDIT_PASS" \
+            "P311D_INDEPENDENT_AUDIT_PASS" \
             p311_audit.log
 
-          echo "P311B_INDEPENDENT_AUDIT_PASS"
+          echo "P311D_CI_VERIFICATION_PASS"
 
       - name: Upload audit log
         if: always()
@@ -84,4 +84,4 @@ jobs:
         with:
           name: p311-independent-audit-log
           path: p311_audit.log
-          if-no-files-found: warn
+          if-no-files-found: error
