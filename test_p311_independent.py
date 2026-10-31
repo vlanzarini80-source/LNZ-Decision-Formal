@@ -1,6 +1,14 @@
 
 #!/usr/bin/env python3
-"""P3.11a: independent mathematical and mutation audit."""
+"""P3.11c: independent mathematical and mutation audit.
+
+Checks exact box-simplex optimality with an independent
+pairwise-exchange oracle, negative mutations and randomized
+regression cases.
+
+No claims of historical JSON provenance or full Python
+implementation verification.
+"""
 
 import copy
 import json
@@ -18,7 +26,8 @@ def require(condition, message):
 
 def encode(doc):
     return json.dumps(
-        doc, separators=(",", ":")
+        doc,
+        separators=(",", ":")
     ).encode("utf-8")
 
 
@@ -49,7 +58,7 @@ def oracle(doc):
     ) != objective:
         return False
 
-    # Any improving transfer invalidates optimality.
+    # An improving feasible transfer disproves optimality.
     for i in range(n):
         for j in range(n):
             if (
@@ -90,29 +99,42 @@ def rejected_by_generator(doc):
         process(encode(doc))
     except Rejected:
         return True
+
     return False
 
 
 def test_baseline():
     doc = baseline()
-    require(oracle(doc), "Independent oracle rejected baseline")
+
+    require(
+        oracle(doc),
+        "Independent oracle rejected baseline"
+    )
 
     result = process(encode(doc))
+
     require(
         result["verification"] == "VALID",
         "Generator rejected valid baseline"
     )
-    audit(encode(doc), result["lean_source"])
+
+    audit(
+        encode(doc),
+        result["lean_source"]
+    )
 
     print("P311_BASELINE_PASS")
 
 
 def test_numeric_mutations():
     original = baseline()
-    original_lean = process(encode(original))["lean_source"]
+
+    original_lean = process(
+        encode(original)
+    )["lean_source"]
 
     mutations = [
-        ("lo", "problem", "lo", 0, "0.5"),
+        ("lo", "problem", "lo", 1, "0.5"),
         ("hi", "problem", "hi", 0, "0.5"),
         ("coeff", "problem", "coeff", 0, "4"),
         ("witness", "certificate", "witness", 0, "0"),
@@ -128,8 +150,19 @@ def test_numeric_mutations():
         else:
             doc[section][field][index] = value
 
+        # The independent oracle must confirm that the
+        # altered mathematical instance is invalid.
+        require(
+            not oracle(doc),
+            "Mutation remains mathematically valid: " + label
+        )
+
+        # Old Lean certificate must not match changed JSON.
         try:
-            audit(encode(doc), original_lean)
+            audit(
+                encode(doc),
+                original_lean
+            )
         except AuditError:
             pass
         else:
@@ -137,23 +170,31 @@ def test_numeric_mutations():
                 "Auditor accepted mutation: " + label
             )
 
+        # Generator must reject the invalid certificate.
         require(
             rejected_by_generator(doc),
             "Generator accepted invalid mutation: " + label
         )
 
-        print("P311_MUTATION_REJECTED:", label)
+        print(
+            "P311_MUTATION_REJECTED:",
+            label
+        )
 
 
 def test_suboptimal_certificate():
     doc = baseline()
-    doc["certificate"]["witness"] = ["0", "1", "0"]
+
+    doc["certificate"]["witness"] = [
+        "0", "1", "0"
+    ]
     doc["certificate"]["objective"] = "2"
 
     require(
         not oracle(doc),
         "Oracle accepted suboptimal witness"
     )
+
     require(
         rejected_by_generator(doc),
         "Generator accepted suboptimal witness"
@@ -168,21 +209,37 @@ def test_randomized():
 
     for _ in range(200):
         n = rng.randint(2, 8)
-        costs = [rng.randint(-10, 10) for _ in range(n)]
+
+        costs = [
+            rng.randint(-10, 10)
+            for _ in range(n)
+        ]
+
         selected = rng.randrange(n)
 
         doc = baseline()
+
         doc["case_id"] = "P311_RANDOM"
         doc["problem"]["dimension"] = n
         doc["problem"]["lo"] = ["0"] * n
         doc["problem"]["hi"] = ["1"] * n
-        doc["problem"]["coeff"] = list(map(str, costs))
+        doc["problem"]["coeff"] = [
+            str(value)
+            for value in costs
+        ]
+
         doc["certificate"]["witness"] = [
             "1" if i == selected else "0"
             for i in range(n)
         ]
-        doc["certificate"]["objective"] = str(costs[selected])
-        doc["certificate"]["threshold"] = str(costs[selected])
+
+        doc["certificate"]["objective"] = str(
+            costs[selected]
+        )
+
+        doc["certificate"]["threshold"] = str(
+            costs[selected]
+        )
 
         expected = oracle(doc)
 
@@ -196,9 +253,13 @@ def test_randomized():
             accepted == expected,
             "Generator/oracle disagreement"
         )
+
         checked += 1
 
-    print("P311_RANDOMIZED_PASS:", checked)
+    print(
+        "P311_RANDOMIZED_PASS:",
+        checked
+    )
 
 
 def main():
@@ -206,7 +267,8 @@ def main():
     test_numeric_mutations()
     test_suboptimal_certificate()
     test_randomized()
-    print("P311A_INDEPENDENT_AUDIT_PASS")
+
+    print("P311C_INDEPENDENT_AUDIT_PASS")
 
 
 if __name__ == "__main__":
