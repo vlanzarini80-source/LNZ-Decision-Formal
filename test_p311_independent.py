@@ -1,13 +1,9 @@
 
 #!/usr/bin/env python3
-"""P3.11c: independent mathematical and mutation audit.
+"""P3.11d: independent exact optimality and certificate mutation audit.
 
-Checks exact box-simplex optimality with an independent
-pairwise-exchange oracle, negative mutations and randomized
-regression cases.
-
-No claims of historical JSON provenance or full Python
-implementation verification.
+Separates primal optimality from threshold-certificate validity.
+Does not establish historical JSON provenance or Lean semantic soundness.
 """
 
 import copy
@@ -26,22 +22,20 @@ def require(condition, message):
 
 def encode(doc):
     return json.dumps(
-        doc,
-        separators=(",", ":")
+        doc, separators=(",", ":")
     ).encode("utf-8")
 
 
 def oracle(doc):
-    """Independent pairwise-exchange optimality test."""
-    p = doc["problem"]
-    cert = doc["certificate"]
+    """Independent primal optimality test via feasible improving transfers."""
+    p, cert = doc["problem"], doc["certificate"]
     n = p["dimension"]
 
     lo = list(map(Fraction, p["lo"]))
     hi = list(map(Fraction, p["hi"]))
     coeff = list(map(Fraction, p["coeff"]))
     w = list(map(Fraction, cert["witness"]))
-    objective = Fraction(cert["objective"])
+    obj = Fraction(cert["objective"])
 
     if not all(
         0 <= lo[i] <= w[i] <= hi[i] <= 1
@@ -55,20 +49,50 @@ def oracle(doc):
     if sum(
         (coeff[i] * w[i] for i in range(n)),
         Fraction(0)
-    ) != objective:
+    ) != obj:
         return False
 
-    # An improving feasible transfer disproves optimality.
-    for i in range(n):
-        for j in range(n):
-            if (
-                w[i] > lo[i]
-                and w[j] < hi[j]
-                and coeff[i] > coeff[j]
-            ):
-                return False
+    return not any(
+        w[i] > lo[i]
+        and w[j] < hi[j]
+        and coeff[i] > coeff[j]
+        for i in range(n)
+        for j in range(n)
+    )
 
-    return True
+
+def certificate_oracle(doc):
+    """Independent exact check of the threshold-based certificate."""
+    p, cert = doc["problem"], doc["certificate"]
+    n = p["dimension"]
+
+    lo = list(map(Fraction, p["lo"]))
+    hi = list(map(Fraction, p["hi"]))
+    coeff = list(map(Fraction, p["coeff"]))
+    w = list(map(Fraction, cert["witness"]))
+    lam = Fraction(cert["threshold"])
+    obj = Fraction(cert["objective"])
+
+    if not all(
+        0 <= lo[i] <= w[i] <= hi[i] <= 1
+        for i in range(n)
+    ):
+        return False
+
+    if sum(w, Fraction(0)) != 1:
+        return False
+
+    if sum(
+        (coeff[i] * w[i] for i in range(n)),
+        Fraction(0)
+    ) != obj:
+        return False
+
+    return all(
+        (not lo[i] < w[i] or coeff[i] <= lam)
+        and (not w[i] < hi[i] or lam <= coeff[i])
+        for i in range(n)
+    )
 
 
 def baseline():
@@ -108,20 +132,22 @@ def test_baseline():
 
     require(
         oracle(doc),
-        "Independent oracle rejected baseline"
+        "Primal oracle rejected baseline"
+    )
+
+    require(
+        certificate_oracle(doc),
+        "Certificate oracle rejected baseline"
     )
 
     result = process(encode(doc))
 
     require(
         result["verification"] == "VALID",
-        "Generator rejected valid baseline"
+        "Generator rejected baseline"
     )
 
-    audit(
-        encode(doc),
-        result["lean_source"]
-    )
+    audit(encode(doc), result["lean_source"])
 
     print("P311_BASELINE_PASS")
 
@@ -150,19 +176,24 @@ def test_numeric_mutations():
         else:
             doc[section][field][index] = value
 
-        # The independent oracle must confirm that the
-        # altered mathematical instance is invalid.
         require(
-            not oracle(doc),
-            "Mutation remains mathematically valid: " + label
+            not certificate_oracle(doc),
+            "Mutation remains certificate-valid: " + label
         )
 
-        # Old Lean certificate must not match changed JSON.
-        try:
-            audit(
-                encode(doc),
-                original_lean
+        if label == "threshold":
+            require(
+                oracle(doc),
+                "Threshold mutation changed primal optimality"
             )
+        else:
+            require(
+                not oracle(doc),
+                "Mutation remains primal-optimal: " + label
+            )
+
+        try:
+            audit(encode(doc), original_lean)
         except AuditError:
             pass
         else:
@@ -170,29 +201,28 @@ def test_numeric_mutations():
                 "Auditor accepted mutation: " + label
             )
 
-        # Generator must reject the invalid certificate.
         require(
             rejected_by_generator(doc),
-            "Generator accepted invalid mutation: " + label
+            "Generator accepted invalid certificate: " + label
         )
 
-        print(
-            "P311_MUTATION_REJECTED:",
-            label
-        )
+        print("P311_MUTATION_REJECTED:", label)
 
 
 def test_suboptimal_certificate():
     doc = baseline()
 
-    doc["certificate"]["witness"] = [
-        "0", "1", "0"
-    ]
+    doc["certificate"]["witness"] = ["0", "1", "0"]
     doc["certificate"]["objective"] = "2"
 
     require(
         not oracle(doc),
-        "Oracle accepted suboptimal witness"
+        "Primal oracle accepted suboptimal witness"
+    )
+
+    require(
+        not certificate_oracle(doc),
+        "Certificate oracle accepted suboptimal witness"
     )
 
     require(
@@ -205,28 +235,21 @@ def test_suboptimal_certificate():
 
 def test_randomized():
     rng = random.Random(311)
-    checked = 0
 
-    for _ in range(200):
+    for iteration in range(200):
         n = rng.randint(2, 8)
-
         costs = [
             rng.randint(-10, 10)
             for _ in range(n)
         ]
-
         selected = rng.randrange(n)
 
         doc = baseline()
-
         doc["case_id"] = "P311_RANDOM"
         doc["problem"]["dimension"] = n
         doc["problem"]["lo"] = ["0"] * n
         doc["problem"]["hi"] = ["1"] * n
-        doc["problem"]["coeff"] = [
-            str(value)
-            for value in costs
-        ]
+        doc["problem"]["coeff"] = list(map(str, costs))
 
         doc["certificate"]["witness"] = [
             "1" if i == selected else "0"
@@ -236,30 +259,32 @@ def test_randomized():
         doc["certificate"]["objective"] = str(
             costs[selected]
         )
-
         doc["certificate"]["threshold"] = str(
             costs[selected]
         )
 
-        expected = oracle(doc)
+        expected = certificate_oracle(doc)
+
+        require(
+            expected == oracle(doc),
+            f"Oracle disagreement on randomized case {iteration}"
+        )
 
         try:
-            process(encode(doc))
+            result = process(encode(doc))
             accepted = True
         except Rejected:
             accepted = False
 
         require(
             accepted == expected,
-            "Generator/oracle disagreement"
+            f"Generator/certificate oracle disagreement at {iteration}"
         )
 
-        checked += 1
+        if accepted:
+            audit(encode(doc), result["lean_source"])
 
-    print(
-        "P311_RANDOMIZED_PASS:",
-        checked
-    )
+    print("P311_RANDOMIZED_PASS: 200")
 
 
 def main():
@@ -268,7 +293,7 @@ def main():
     test_suboptimal_certificate()
     test_randomized()
 
-    print("P311C_INDEPENDENT_AUDIT_PASS")
+    print("P311D_INDEPENDENT_AUDIT_PASS")
 
 
 if __name__ == "__main__":
