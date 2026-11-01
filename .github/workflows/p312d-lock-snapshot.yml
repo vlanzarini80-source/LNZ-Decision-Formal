@@ -1,0 +1,69 @@
+
+name: P312d Dependency Lock Snapshot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify toolchain
+        run: |
+          set -euo pipefail
+          test -s lean-toolchain
+          grep -Fxq \
+            "leanprover/lean4:v4.24.0" \
+            lean-toolchain
+
+      - name: Install elan
+        run: |
+          set -euo pipefail
+          curl -sSfL \
+            https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            -o elan-init.sh
+          sh elan-init.sh -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Generate dependency manifest
+        run: |
+          set -euo pipefail
+          lake update
+          test -s lake-manifest.json
+
+          python3 -m json.tool \
+            lake-manifest.json > /dev/null
+
+          sha256sum lake-manifest.json \
+            | tee p312d_manifest.sha256
+
+          lean --version | tee p312d_lean.txt
+          lake --version | tee p312d_lake.txt
+
+      - name: Verify build
+        run: |
+          set -euo pipefail
+          lake exe cache get
+          lake build
+
+          sha256sum -c p312d_manifest.sha256
+
+          echo "P312D_SNAPSHOT_BUILD_PASS"
+
+      - name: Upload dependency evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: p312d-dependency-lock-snapshot
+          path: |
+            lake-manifest.json
+            p312d_manifest.sha256
+            p312d_lean.txt
+            p312d_lake.txt
+          if-no-files-found: error
