@@ -24,6 +24,7 @@ jobs:
             lnz_p34d.py \
             test_p311_independent.py \
             test_p312_pipeline.py \
+            test_p312c1_adversarial.py \
             LNZCertificateBridge.lean \
             LNZCertificatePayloadP33.lean \
             lean-toolchain
@@ -43,7 +44,8 @@ jobs:
             p310a_audit.py \
             lnz_p34d.py \
             test_p311_independent.py \
-            test_p312_pipeline.py
+            test_p312_pipeline.py \
+            test_p312c1_adversarial.py
 
       - name: Install elan
         run: |
@@ -96,21 +98,17 @@ jobs:
           python3 -u test_p312_pipeline.py \
             2>&1 | tee p312_python.log
 
-          grep -Fxq \
-            "P312_JSON_PYTHON_AUDIT_PASS" \
-            p312_python.log
-
-          grep -Fxq \
-            "P312_DETERMINISTIC_GENERATION_PASS" \
-            p312_python.log
-
-          grep -Fxq \
-            "P312_MUTATION_REJECTED" \
-            p312_python.log
-
-          grep -Fxq \
-            "P312_LEAN_SOURCE_GENERATED" \
-            p312_python.log
+          for marker in \
+            P312_JSON_PYTHON_AUDIT_PASS \
+            P312_DETERMINISTIC_GENERATION_PASS \
+            P312_MUTATION_REJECTED \
+            P312_LEAN_SOURCE_GENERATED
+          do
+            grep -Fxq "$marker" p312_python.log || {
+              echo "::error::Missing marker: $marker"
+              exit 1
+            }
+          done
 
           test -s P312Generated.lean
           test -s p312_input.sha256
@@ -141,20 +139,45 @@ jobs:
             "sorryAx|unsafe|Lean\.ofReduceBool" \
             p312_lean.log
           then
-            echo "::error::Unexpected axiom or unsafe declaration"
+            echo "::error::Unexpected axiom"
             exit 1
           fi
 
           echo "P312_LEAN_COMPILE_PASS"
 
-      - name: Upload P312 evidence
+      - name: Execute P312c1 adversarial tests
+        run: |
+          set -euo pipefail
+
+          python3 -u test_p312c1_adversarial.py \
+            2>&1 | tee p312c1_adversarial.log
+
+          for marker in \
+            P312C1_PARSER_PASS \
+            P312C1_SCHEMA_PASS \
+            P312C1_NUMERIC_PASS \
+            P312C1_CERTIFICATE_PASS \
+            P312C1_GENERATOR_PASS \
+            P312C1_ADVERSARIAL_PASS
+          do
+            grep -Fxq "$marker" \
+              p312c1_adversarial.log || {
+              echo "::error::Missing marker: $marker"
+              exit 1
+            }
+          done
+
+          echo "P312C2_ADVERSARIAL_CI_PASS"
+
+      - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: p312-json-python-lean-evidence
+          name: p312c2-verification-evidence
           path: |
             p312_python.log
             p312_lean.log
+            p312c1_adversarial.log
             p312_input.sha256
             P312Generated.lean
           if-no-files-found: warn
@@ -164,3 +187,4 @@ jobs:
           set -euo pipefail
           echo "P310B_WORKFLOW_COMPLETED"
           echo "P312B_WORKFLOW_COMPLETED"
+          echo "P312C2_WORKFLOW_COMPLETED"
