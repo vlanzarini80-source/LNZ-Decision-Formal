@@ -72,6 +72,29 @@ jobs:
           lake exe cache get
           lake build
 
+      - name: P312d capture dependency manifest
+        run: |
+          set -euo pipefail
+
+          test -s lake-manifest.json
+
+          python3 -m json.tool \
+            lake-manifest.json > /dev/null
+
+          sha256sum lake-manifest.json \
+            > p312d_manifest.sha256
+
+          sha256sum -c p312d_manifest.sha256
+
+          cp lean-toolchain p312d_lean-toolchain.txt
+
+          git rev-parse HEAD > p312d_commit.txt
+
+          echo "P312D_MANIFEST_SNAPSHOT_PASS"
+          cat p312d_manifest.sha256
+          cat p312d_lean-toolchain.txt
+          cat p312d_commit.txt
+
       - name: Compile certificate dependencies
         run: |
           set -euo pipefail
@@ -104,10 +127,7 @@ jobs:
             P312_MUTATION_REJECTED \
             P312_LEAN_SOURCE_GENERATED
           do
-            grep -Fxq "$marker" p312_python.log || {
-              echo "::error::Missing marker: $marker"
-              exit 1
-            }
+            grep -Fxq "$marker" p312_python.log
           done
 
           test -s P312Generated.lean
@@ -160,11 +180,7 @@ jobs:
             P312C1_GENERATOR_PASS \
             P312C1_ADVERSARIAL_PASS
           do
-            grep -Fxq "$marker" \
-              p312c1_adversarial.log || {
-              echo "::error::Missing marker: $marker"
-              exit 1
-            }
+            grep -Fxq "$marker" p312c1_adversarial.log
           done
 
           echo "P312C2_ADVERSARIAL_CI_PASS"
@@ -173,18 +189,24 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: p312c2-verification-evidence
+          name: p312d-verification-evidence
           path: |
             p312_python.log
             p312_lean.log
             p312c1_adversarial.log
             p312_input.sha256
             P312Generated.lean
+            lake-manifest.json
+            p312d_manifest.sha256
+            p312d_lean-toolchain.txt
+            p312d_commit.txt
           if-no-files-found: warn
 
       - name: Final status
         run: |
           set -euo pipefail
+          sha256sum -c p312d_manifest.sha256
           echo "P310B_WORKFLOW_COMPLETED"
           echo "P312B_WORKFLOW_COMPLETED"
           echo "P312C2_WORKFLOW_COMPLETED"
+          echo "P312D_MANIFEST_CAPTURE_COMPLETED"
