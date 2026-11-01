@@ -22,6 +22,8 @@ jobs:
             p310b_pipeline.py \
             p310a_audit.py \
             lnz_p34d.py \
+            test_p311_independent.py \
+            test_p312_pipeline.py \
             LNZCertificateBridge.lean \
             LNZCertificatePayloadP33.lean \
             lean-toolchain
@@ -39,7 +41,9 @@ jobs:
           python3 -m py_compile \
             p310b_pipeline.py \
             p310a_audit.py \
-            lnz_p34d.py
+            lnz_p34d.py \
+            test_p311_independent.py \
+            test_p312_pipeline.py
 
       - name: Install elan
         run: |
@@ -85,7 +89,78 @@ jobs:
           export LEAN_PATH=".:${LEAN_PATH:-}"
           python3 p310b_pipeline.py
 
+      - name: Execute P312 JSON Python audit
+        run: |
+          set -euo pipefail
+
+          python3 -u test_p312_pipeline.py \
+            2>&1 | tee p312_python.log
+
+          grep -Fxq \
+            "P312_JSON_PYTHON_AUDIT_PASS" \
+            p312_python.log
+
+          grep -Fxq \
+            "P312_DETERMINISTIC_GENERATION_PASS" \
+            p312_python.log
+
+          grep -Fxq \
+            "P312_MUTATION_REJECTED" \
+            p312_python.log
+
+          grep -Fxq \
+            "P312_LEAN_SOURCE_GENERATED" \
+            p312_python.log
+
+          test -s P312Generated.lean
+          test -s p312_input.sha256
+
+          echo "P312_PYTHON_CI_PASS"
+
+      - name: Compile freshly generated P312 Lean
+        run: |
+          set -euo pipefail
+          export LEAN_PATH=".:${LEAN_PATH:-}"
+
+          lake env lean \
+            -o P312Generated.olean \
+            P312Generated.lean \
+            2>&1 | tee p312_lean.log
+
+          test -s P312Generated.olean
+
+          grep -Fq \
+            "LNZ.p34_instance_optimal" \
+            p312_lean.log
+
+          grep -Fq \
+            "depends on axioms:" \
+            p312_lean.log
+
+          if grep -Eq \
+            "sorryAx|unsafe|Lean\.ofReduceBool" \
+            p312_lean.log
+          then
+            echo "::error::Unexpected axiom or unsafe declaration"
+            exit 1
+          fi
+
+          echo "P312_LEAN_COMPILE_PASS"
+
+      - name: Upload P312 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p312-json-python-lean-evidence
+          path: |
+            p312_python.log
+            p312_lean.log
+            p312_input.sha256
+            P312Generated.lean
+          if-no-files-found: warn
+
       - name: Final status
         run: |
           set -euo pipefail
           echo "P310B_WORKFLOW_COMPLETED"
+          echo "P312B_WORKFLOW_COMPLETED"
