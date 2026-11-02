@@ -25,6 +25,7 @@ jobs:
             test_p311_independent.py \
             test_p312_pipeline.py \
             test_p312c1_adversarial.py \
+            test_p313_trust_boundary.py \
             LNZCertificateBridge.lean \
             LNZCertificatePayloadP33.lean \
             lean-toolchain \
@@ -46,7 +47,8 @@ jobs:
             lnz_p34d.py \
             test_p311_independent.py \
             test_p312_pipeline.py \
-            test_p312c1_adversarial.py
+            test_p312c1_adversarial.py \
+            test_p313_trust_boundary.py
 
       - name: Install elan
         run: |
@@ -191,6 +193,17 @@ jobs:
 
           echo "P312C2_ADVERSARIAL_CI_PASS"
 
+      - name: Execute P313 trust boundary tests
+        run: |
+          set -euo pipefail
+
+          python3 -u test_p313_trust_boundary.py \
+            2>&1 | tee p313_trust_boundary.log
+
+          test -s p313_trust_boundary.log
+
+          echo "P313B_TEST_PROCESS_COMPLETED"
+
       - name: P312f final dependency integrity
         run: |
           set -euo pipefail
@@ -207,11 +220,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: p312f-verification-evidence
+          name: p313b-verification-evidence
           path: |
             p312_python.log
             p312_lean.log
             p312c1_adversarial.log
+            p313_trust_boundary.log
             p312_input.sha256
             P312Generated.lean
             lake-manifest.json
@@ -233,3 +247,4 @@ jobs:
           echo "P312C2_WORKFLOW_COMPLETED"
           echo "P312D_MANIFEST_CAPTURE_COMPLETED"
           echo "P312F_LOCKED_DEPENDENCIES_PASS"
+          echo "P313B_TEST_PROCESS_COMPLETED"
