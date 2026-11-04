@@ -1,0 +1,130 @@
+
+name: P314 TB CI Candidate
+
+on:
+  push:
+    branches:
+      - test/p314-tb-ci
+    paths:
+      - p314_tb_ci.py
+      - .github/workflows/p314-tb-ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  boundary:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check required files
+        run: |
+          set -euo pipefail
+          for file in \
+            lnz_p34d.py \
+            p310a_audit.py \
+            test_p311_independent.py \
+            p314_tb_ci.py \
+            LNZCertificateBridge.lean \
+            LNZCertificatePayloadP33.lean \
+            lean-toolchain \
+            lake-manifest.json
+          do
+            test -s "$file"
+          done
+
+          git rev-parse HEAD > p314_tb_ci_commit.txt
+          python3 -m py_compile p314_tb_ci.py
+
+      - name: Install Lean manager
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            -o elan-init.sh
+
+          sh elan-init.sh -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Check Lean and lockfile
+        run: |
+          set -euo pipefail
+          grep -Fxq \
+            'leanprover/lean4:v4.24.0' \
+            lean-toolchain
+
+          python3 -m json.tool \
+            lake-manifest.json > /dev/null
+
+          sha256sum lake-manifest.json \
+            > p314_tb_ci_manifest.sha256
+
+          lake --version
+          lean --version
+
+      - name: Resolve locked dependencies
+        run: |
+          set -euo pipefail
+          lake exe cache get
+          lake build
+          sha256sum -c p314_tb_ci_manifest.sha256
+
+      - name: Build original Lean dependencies
+        run: |
+          set -euo pipefail
+          export LEAN_PATH=".:${LEAN_PATH:-}"
+
+          lake env lean \
+            -o LNZCertificateBridge.olean \
+            LNZCertificateBridge.lean
+
+          lake env lean \
+            -o LNZCertificatePayloadP33.olean \
+            LNZCertificatePayloadP33.lean
+
+      - name: Run boundary tests and compile checked Lean
+        run: |
+          set -euo pipefail
+          export LEAN_PATH=".:${LEAN_PATH:-}"
+
+          python3 -u p314_tb_ci.py \
+            --lean \
+            --report p314_tb_ci_report.json \
+            2>&1 | tee p314_tb_ci_python.log
+
+          grep -Fxq \
+            P314_TB_CI_BASELINE_PASS \
+            p314_tb_ci_python.log
+
+          grep -Fxq \
+            P314_TB_CI_PYTHON_PASS \
+            p314_tb_ci_python.log
+
+          grep -Fxq \
+            P314_TB_CI_LEAN_COMPILE_PASS \
+            p314_tb_ci_python.log
+
+          sha256sum -c \
+            p314_tb_ci_manifest.sha256
+
+          echo "P314_TB_CI_WORKFLOW_PASS"
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p314-tb-ci-evidence
+          if-no-files-found: warn
+          path: |
+            p314_tb_ci_report.json
+            p314_tb_ci_input.json
+            p314_tb_ci_source.lean
+            p314_tb_ci_python.log
+            p314_tb_ci_lean.log
+            p314_tb_ci_commit.txt
+            p314_tb_ci_manifest.sha256
+            lean-toolchain
