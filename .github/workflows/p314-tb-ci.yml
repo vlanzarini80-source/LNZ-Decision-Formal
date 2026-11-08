@@ -4,10 +4,14 @@ name: P314 TB CI Candidate
 on:
   push:
     branches:
-      - test/p314-tb-ci
+      - test/p315-repro-audit
     paths:
-      - p314_tb_ci.py
-      - .github/workflows/p314-tb-ci.yml
+      - '**/*.py'
+      - '**/*.lean'
+      - 'lean-toolchain'
+      - 'lakefile.toml'
+      - 'lake-manifest.json'
+      - '.github/workflows/p314-tb-ci.yml'
   workflow_dispatch:
 
 permissions:
