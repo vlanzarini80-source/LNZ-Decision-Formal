@@ -1,0 +1,126 @@
+name: P315 Git provenance audit
+
+on:
+  push:
+    branches:
+      - test/p315-repro-audit
+    paths:
+      - '.github/workflows/p315-origin-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  historical-sources:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Git history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Compare original source bytes against historical Git blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > p315_expected_sources.sha256 <<'P315_SOURCE_HASHES'
+          ae6cdd0e1bc719229155852e87267de20c418f4430c903fe1edb60de3d10cac5  .github/workflows/lean-check.yml
+          c6bc55e4c5b1228dda1bf1f78539a50c800cbeb287651a2cbbcc68be938d5cb6  .github/workflows/lean-p35-matrix.yml
+          586e9787adbec7874aa1d8f35d6ed326eaeb2ed5f6231da751e9e7636d98464b  .github/workflows/p310b-pipeline.yml
+          6f086c2556984d5f4a3acf08dc8439b42b93eddc2e0e5cc1f3cc9c4f05f772f3  .github/workflows/p311-independent-audit.yml
+          34a14951f5057d1f3df641ffbde170075cc75b8586bfb51faba676e0e70dbffa  .github/workflows/p312d-lock-snapshot.yml
+          3a9c4d48cb7bf3c539890b2bc60f8c37c630276494f33676e0140332a8a2d747  .github/workflows/p314-tb-ci.yml
+          fe3eeaa0da54df2dc4b9e415b7e3cec02eaaba4b32a34cdda0594d5c009a7d9b  LNZCertificateBridge.lean
+          895adeeefe64623e555e5f180bf750642efa94d50d841e8f5de11807e60944c0  LNZCertificatePayloadP33.lean
+          70d3915ea3bd0e238bad05f05f2df85d7000dac62b374a955e4b0681df5fb4bb  LNZDecisionFormal.lean
+          4bad9689bd415633b68502bacd0c900a0eef45807ac89bb567d65b7d8829c43e  LNZExchange.lean
+          9172770d73600fe71e15a84aa3322d1fc8c2dbc1f697028466935b4d27a4a551  LNZGlobalOptimality.lean
+          09a254b0da9460d237b7401f1caeb955e04290c3e6abd120fbfa86315b3739d4  LNZLowerBound.lean
+          02be4497dc08241bc8b5dacdea991bbf52930f7e7925784b86d4eca891ad60d6  P34Generated.lean
+          3af1bdaf7b306d5ad630972b06c250a38ea8bcfdc26b00a85137eeeb907d085f  README.md
+          a778b5db42b0b935d3a933f04dcfff091571d5dd84257bc4a7e54c94684ddc70  lake-manifest.json
+          357ee3f016d6649b3eb96fcee3f18377fc682f61c1b5e05045b77dadb3078761  lakefile.toml
+          42779d67b81608af8a12aa4328d2ab47ca201925b3b2bd68369587b5340bb434  lean-toolchain
+          e1eff23a86cbf37243d94d9ac6dc876377941c6bd9a92e9ad04eb5fbf11b926e  lnz_p34d.py
+          534248d3d8ff7a4c71d387c639e8bdd0059763a360869d86e884799ef072f164  p310a_audit.py
+          54eb2bd9299814ec8a4025ac90286690cfa196a872d331ca11ac613981d3a808  p310b_pipeline.py
+          7499bc793ecbb5b8956279711dbfd66ac4869b706c666e4dd9027e9c7c12795b  p314_tb_ci.py
+          f96faece3875c888854ce5f2e00fb306592c69de073b232e8b4848c671e71840  p35_matrix.py
+          1cffe39da1b1f50e973f31015a32c972efb55ec41f43f7cc1c7bd423b9c80b48  p39_semantic_audit.py
+          85d4168cee6ad6fbc06ff5dafca9723e051e04d6703099d4a5f8c31360b05835  test_p311_independent.py
+          33a08cbb9cb42e8b4534496a48d16a24f7cd5a31fd567e46839d9fc2c8d54cdd  test_p312_pipeline.py
+          d28b0f129674ab73a1ab2cf66220a0cd8c8eb38b7607b55de30c9ae2cb5c805e  test_p312c1_adversarial.py
+          0a2fc1fc89d9bd184bd0b9502ba88ba5993b12362051376433daa1535c9374e9  test_p313_trust_boundary.py
+          d559302880c8a29993cf3f19002294e50bec99c5e696a65dbd6c72d89b14fdd7  test_p36.py
+          e93804dfa61bc8d39bd996e5dd002e85dccdffb8055bd70c331a7258dae6a806  test_p36_oracle.py
+          b86e538434abf29e3f1ca669d9f29fd26360cdee10d9d0284036de9eaa839249  test_p38_independent.py
+          cdb23331ab9451b97f598bd065108d8c6643008dfe76f45fc347cc448e945abb  verify_p35.sh
+          P315_SOURCE_HASHES
+          python3 - <<'P315_PYTHON'
+          import hashlib, json, os, pathlib, subprocess, sys
+          
+          PIN = "bf53f4c0d86c65f53f20aacc578cb26ee103d820"
+          REPOSITORY = "vlanzarini80-source/LNZ-Decision-Formal"
+          expected = {}
+          for line in pathlib.Path("p315_expected_sources.sha256").read_text().splitlines():
+              digest, path = line.split("  ", 1)
+              if path in expected:
+                  raise SystemExit("Duplicate source path in manifest: " + path)
+              expected[path] = digest
+          
+          def git(*args):
+              return subprocess.run(["git", *args], check=True, capture_output=True).stdout
+          
+          actual_commit = git("rev-parse", f"{PIN}^{{commit}}").decode().strip()
+          head_commit = git("rev-parse", "HEAD").decode().strip()
+          repository = os.environ.get("GITHUB_REPOSITORY", "")
+          if repository != REPOSITORY:
+              raise SystemExit("Repository mismatch: " + repository)
+          if actual_commit != PIN:
+              raise SystemExit("Pinned commit did not resolve exactly")
+          if head_commit != os.environ.get("GITHUB_SHA", ""):
+              raise SystemExit("Actions HEAD differs from GITHUB_SHA")
+          subprocess.run(["git", "merge-base", "--is-ancestor", PIN, "HEAD"], check=True)
+          
+          rows = []
+          for path, expected_sha in sorted(expected.items()):
+              try:
+                  data = git("show", f"{PIN}:{path}")
+              except subprocess.CalledProcessError:
+                  rows.append({"path": path, "expected_sha256": expected_sha, "status": "MISSING_IN_GIT"})
+                  continue
+              actual_sha = hashlib.sha256(data).hexdigest()
+              rows.append({"path": path, "expected_sha256": expected_sha,
+                           "actual_sha256": actual_sha,
+                           "status": "MATCH" if expected_sha == actual_sha else "MISMATCH"})
+          
+          result = {
+              "audit": "P315_GIT_BLOB_PROVENANCE",
+              "repository": repository,
+              "historical_commit": PIN,
+              "workflow_commit": head_commit,
+              "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+              "checked_count": len(rows),
+              "matched_count": sum(r["status"] == "MATCH" for r in rows),
+              "files": rows,
+          }
+          pathlib.Path("p315_git_provenance_report.json").write_text(
+              json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          for row in rows:
+              print(row["status"], row["path"])
+          if not rows or any(r["status"] != "MATCH" for r in rows):
+              raise SystemExit("P315_GIT_BLOB_PROVENANCE_FAIL")
+          print("P315_GIT_BLOB_PROVENANCE_PASS", len(rows), "file")
+          P315_PYTHON
+
+      - name: Upload provenance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p315-git-provenance
+          if-no-files-found: warn
+          path: |
+            p315_git_provenance_report.json
+            p315_expected_sources.sha256
