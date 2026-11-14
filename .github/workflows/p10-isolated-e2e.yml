@@ -1,0 +1,102 @@
+name: P10 Isolated JSON-to-Lean E2E
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/p10-isolated-e2e.yml'
+      - 'lnz_p34d.py'
+      - 'p310a_audit.py'
+      - 'test_p311_independent.py'
+      - 'test_p313_trust_boundary.py'
+      - 'p314_tb_ci.py'
+      - 'LNZ*.lean'
+      - 'lean-toolchain'
+      - 'lakefile.toml'
+      - 'lake-manifest.json'
+
+permissions:
+  contents: read
+
+jobs:
+  p10-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify pinned toolchain and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s lake-manifest.json
+          grep -Fxq 'leanprover/lean4:v4.24.0' lean-toolchain
+          python3 - <<'PY'
+          import json
+          with open('lake-manifest.json', encoding='utf-8') as f:
+              data = json.load(f)
+          mathlib = [p for p in data['packages'] if p['name'] == 'mathlib']
+          assert len(mathlib) == 1
+          assert mathlib[0]['rev'] == 'f897ebcf72cd16f89ab4577d0c826cd14afaafc7'
+          assert mathlib[0]['inputRev'] == 'v4.24.0'
+          print('PINNED_MATHLIB_CONFIRMED')
+          PY
+          sha256sum lake-manifest.json > /tmp/p10-manifest.sha256
+          git rev-parse HEAD | tee p10-commit.txt
+
+      - name: Run independent Python and adversarial checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 test_p311_independent.py
+          python3 p310a_audit.py --self-test
+          python3 test_p313_trust_boundary.py
+          python3 p314_tb_ci.py --report p314_python_report.json
+
+      - name: Install Lean toolchain
+        uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: true
+          use-mathlib-cache: true
+          build: false
+          test: false
+
+      - name: Compile actual JSON-derived certificate and check trust boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum -c /tmp/p10-manifest.sha256
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+          lake env lean -o LNZLowerBound.olean LNZLowerBound.lean
+          lake env lean -o LNZExchange.olean LNZExchange.lean
+          lake env lean -o LNZGlobalOptimality.olean LNZGlobalOptimality.lean
+          lake env lean -o LNZCertificateBridge.olean LNZCertificateBridge.lean
+          lake env lean -o LNZCertificatePayloadP33.olean LNZCertificatePayloadP33.lean
+          python3 p314_tb_ci.py --lean --report p314_e2e_report.json
+          sha256sum -c /tmp/p10-manifest.sha256
+          python3 - <<'PY'
+          import json
+          with open('p314_e2e_report.json', encoding='utf-8') as f:
+              r = json.load(f)
+          assert r['lean_compilation'] == 'PASS'
+          assert r['python_boundary_test'] == 'PASS'
+          assert r['tamper_scenarios_rejected'] == 4
+          print('P10_E2E_CANDIDATE_PASS')
+          PY
+
+      - name: Upload audit evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p10-isolated-audit
+          if-no-files-found: warn
+          path: |
+            p10-commit.txt
+            p314_python_report.json
+            p314_e2e_report.json
+            p314_tb_ci_input.json
+            p314_tb_ci_source.lean
+            p314_tb_ci_lean.log
