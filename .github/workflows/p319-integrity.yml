@@ -1,0 +1,85 @@
+
+name: P319 Independent Integrity Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - test/p316a-decision-contract
+    paths:
+      - 'p319_integrity_audit.py'
+      - 'lnz_p34d.py'
+      - 'p310a_audit.py'
+      - '.github/workflows/p319-integrity.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Record commit
+        run: git rev-parse HEAD > p319-commit.txt
+
+      - name: Check syntax
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            lnz_p34d.py \
+            p310a_audit.py \
+            p319_integrity_audit.py
+
+      - name: Run original independent parser tests
+        run: |
+          set -euo pipefail
+          python3 p310a_audit.py --self-test
+
+      - name: Run P319
+        run: |
+          set -euo pipefail
+          python3 p319_integrity_audit.py \
+            | tee p319-audit.log
+
+      - name: Validate report
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+
+          with open(
+              "p319_integrity_report.json",
+              encoding="utf-8"
+          ) as f:
+              report = json.load(f)
+
+          assert report["status"] == (
+              "PYTHON_INTEGRITY_AUDIT_PASS"
+          )
+          assert report["field_mutations_rejected"] == 7
+          assert report["source_mutations_rejected"] == 1
+          assert report["total_mutations_rejected"] == 8
+          assert report["lean_executed"] is False
+          assert report["lean_semantics_certified"] is False
+          assert report["arbitrary_documents_verified"] is False
+
+          print("P319_REPORT_VALIDATION_PASS")
+          PY
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p319-integrity-evidence
+          if-no-files-found: warn
+          path: |
+            p319-commit.txt
+            p319-audit.log
+            p319_integrity_report.json
