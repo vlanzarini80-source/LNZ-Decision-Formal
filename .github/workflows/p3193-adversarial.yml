@@ -1,0 +1,131 @@
+
+name: P319.3 Adversarial Lean Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - test/p316a-decision-contract
+    paths:
+      - 'p3193_adversarial_audit.py'
+      - '.github/workflows/p3193-adversarial.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  adversarial-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify pinned dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s lake-manifest.json
+          grep -Fxq \
+            'leanprover/lean4:v4.24.0' \
+            lean-toolchain
+
+      - name: Generate positive and negative sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            lnz_p34d.py \
+            p310a_audit.py \
+            p319_integrity_audit.py \
+            p319_lean_bridge.py \
+            p3193_adversarial_audit.py
+
+          python3 p319_lean_bridge.py prepare
+
+      - name: Install Lean
+        uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: true
+          use-mathlib-cache: true
+          build: false
+          test: false
+
+      - name: Compile dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+
+          for module in \
+            LNZLowerBound \
+            LNZExchange \
+            LNZGlobalOptimality \
+            LNZCertificateBridge \
+            LNZCertificatePayloadP33
+          do
+            lake env lean -o "$module.olean" \
+              "$module.lean"
+          done
+
+      - name: Compile positive certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+
+          cp P319PositiveGenerated.lean P34Generated.lean
+
+          lake env lean -o P34Generated.olean \
+            P34Generated.lean \
+            > p319-positive.log 2>&1
+
+      - name: Compile negative certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+
+          cp P319NegativeGenerated.lean P34Generated.lean
+
+          set +e
+          lake env lean P34Generated.lean \
+            > p319-negative.log 2>&1
+          result=$?
+          set -e
+
+          if [ "$result" -eq 0 ]; then
+            echo "INVALID_CERTIFICATE_ACCEPTED"
+            exit 1
+          fi
+
+      - name: Independent adversarial evidence audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 p3193_adversarial_audit.py \
+            | tee p3193-audit.log
+
+      - name: Restore original generated file
+        if: always()
+        shell: bash
+        run: |
+          git restore P34Generated.lean || true
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p3193-adversarial-evidence
+          if-no-files-found: warn
+          path: |
+            P319PositiveGenerated.lean
+            P319NegativeGenerated.lean
+            p319-positive.log
+            p319-negative.log
+            p3193-audit.log
+            p3193_audit_report.json
+            p319_lean_bridge_report.json
