@@ -1,0 +1,66 @@
+
+name: P318 Concrete Spec Probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/p318-concrete-spec.yml'
+      - 'P318ConcreteSpecProbe.lean'
+      - 'P34Generated.lean'
+      - 'LNZ*.lean'
+      - 'lean-toolchain'
+      - 'lakefile.toml'
+      - 'lake-manifest.json'
+
+permissions:
+  contents: read
+
+jobs:
+  lean-spec-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check pinned dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s lake-manifest.json
+          grep -Fxq 'leanprover/lean4:v4.24.0' lean-toolchain
+          sha256sum lake-manifest.json > /tmp/p318-manifest.sha256
+
+      - name: Install Lean
+        uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: true
+          use-mathlib-cache: true
+          build: false
+          test: false
+
+      - name: Compile independent specification bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+          lake env lean -o LNZLowerBound.olean LNZLowerBound.lean
+          lake env lean -o LNZExchange.olean LNZExchange.lean
+          lake env lean -o LNZGlobalOptimality.olean LNZGlobalOptimality.lean
+          lake env lean -o LNZCertificateBridge.olean LNZCertificateBridge.lean
+          lake env lean -o LNZCertificatePayloadP33.olean LNZCertificatePayloadP33.lean
+          lake env lean -o P34Generated.olean P34Generated.lean
+          lake env lean P318ConcreteSpecProbe.lean | tee p318-lean.log
+          sha256sum -c /tmp/p318-manifest.sha256
+          grep -q 'p318_concrete_spec_bound' p318-lean.log
+
+      - name: Preserve audit log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p318-concrete-spec-log
+          if-no-files-found: warn
+          path: p318-lean.log
