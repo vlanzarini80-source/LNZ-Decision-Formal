@@ -1,0 +1,64 @@
+
+name: P317 Isolated Source Binding
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/p317-isolated-binding.yml'
+      - 'p317_source_binding.py'
+      - 'lnz_p34d.py'
+      - 'p310a_audit.py'
+      - 'test_p311_independent.py'
+
+permissions:
+  contents: read
+
+jobs:
+  p317-binding:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify Python source binding
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 p317_source_binding.py \
+            --report p317_binding_report.json
+
+      - name: Check audit report
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import json
+
+          with open(
+              "p317_binding_report.json",
+              encoding="utf-8",
+          ) as f:
+              report = json.load(f)
+
+          assert report["mutation_rejections"] == 11
+
+          assert len(report["input_sha256"]) == 64
+          assert len(report["source_sha256"]) == 64
+
+          print("P317_BINDING_REPORT_CHECK_PASS")
+          PY
+
+      - name: Archive audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p317-binding-audit
+          if-no-files-found: warn
+          path: p317_binding_report.json
