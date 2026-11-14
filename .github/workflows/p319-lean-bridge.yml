@@ -1,0 +1,170 @@
+
+name: P319.2 Lean Certificate Bridge
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - test/p316a-decision-contract
+    paths:
+      - 'p319_lean_bridge.py'
+      - '.github/workflows/p319-lean-bridge.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  lean-certificate-bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check pinned Lean environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s lake-manifest.json
+          grep -Fxq \
+            'leanprover/lean4:v4.24.0' \
+            lean-toolchain
+          sha256sum lake-manifest.json \
+            > p319-manifest.sha256
+
+      - name: Prepare independent bridge inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            lnz_p34d.py \
+            p310a_audit.py \
+            p319_integrity_audit.py \
+            p319_lean_bridge.py
+
+          python3 p319_lean_bridge.py prepare \
+            | tee p319-prepare.log
+
+      - name: Install Lean
+        uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: true
+          use-mathlib-cache: true
+          build: false
+          test: false
+
+      - name: Compile mathematical dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+
+          lake env lean -o LNZLowerBound.olean \
+            LNZLowerBound.lean
+
+          lake env lean -o LNZExchange.olean \
+            LNZExchange.lean
+
+          lake env lean -o LNZGlobalOptimality.olean \
+            LNZGlobalOptimality.lean
+
+          lake env lean -o LNZCertificateBridge.olean \
+            LNZCertificateBridge.lean
+
+          lake env lean -o LNZCertificatePayloadP33.olean \
+            LNZCertificatePayloadP33.lean
+
+      - name: Positive Lean compilation
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+
+          cp P319PositiveGenerated.lean \
+            P34Generated.lean
+
+          lake env lean -o P34Generated.olean \
+            P34Generated.lean \
+            2>&1 | tee p319-positive.log
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          log = Path("p319-positive.log").read_text()
+          assert "sorryAx" not in log
+          assert "p34_instance_optimal" in log
+          print("P319_POSITIVE_LEAN_COMPILED")
+          PY
+
+      - name: Negative Lean compilation must fail
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+
+          cp P319NegativeGenerated.lean \
+            P34Generated.lean
+
+          set +e
+          lake env lean P34Generated.lean \
+            > p319-negative.log 2>&1
+          result=$?
+          set -e
+
+          if [ "$result" -eq 0 ]; then
+            echo "INVALID_CERTIFICATE_ACCEPTED"
+            exit 1
+          fi
+
+          if ! grep -q 'error:' p319-negative.log; then
+            echo "NEGATIVE_FAILURE_NOT_CLASSIFIED"
+            exit 1
+          fi
+
+          echo "P319_NEGATIVE_LEAN_REJECTED"
+
+      - name: Restore source and verify dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          git restore P34Generated.lean
+          sha256sum -c p319-manifest.sha256
+
+      - name: Update evidence report
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("p319_lean_bridge_report.json")
+          report = json.loads(path.read_text())
+
+          report["lean_positive_compiled"] = True
+          report["lean_negative_rejected"] = True
+          report["status"] = "P319_2_CI_CHECKS_PASS"
+          report["certified"] = False
+
+          path.write_text(
+              json.dumps(report, indent=2, sort_keys=True)
+              + "\n"
+          )
+          print("P319_2_REPORT_WRITTEN")
+          PY
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p319-lean-bridge-evidence
+          if-no-files-found: warn
+          path: |
+            p319-prepare.log
+            p319-positive.log
+            p319-negative.log
+            p319-manifest.sha256
+            p319_lean_bridge_report.json
