@@ -1,0 +1,151 @@
+name: P320.8c Elaborated Type Audit
+
+on:
+  push:
+    branches:
+      - test/p316a-decision-contract
+    paths:
+      - .github/workflows/p3208c-elaborated-type.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  elaborated-type-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout pinned development commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require correct branch and toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = 'test/p316a-decision-contract'
+          test "$(tr -d '\r\n' < lean-toolchain)" = 'leanprover/lean4:v4.24.0'
+          test -f lake-manifest.json
+          python3 - <<'PY_CHECK'
+          import json
+          m=json.load(open('lake-manifest.json'))
+          assert any(p.get('name')=='mathlib' and p.get('rev')=='f897ebcf72cd16f89ab4577d0c826cd14afaafc7' for p in m['packages']), 'MATHLIB_REV_MISMATCH'
+          PY_CHECK
+      - name: Install pinned Lean and mathlib
+        uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: true
+      - name: Fetch original GitHub Actions artifact A
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/14158146964/zip" \
+            --output /tmp/p3208-original.zip
+          echo '67e989c1db1cae8f9cb9f666b4c5dacbe25ee111a524817475aa64c157037839  /tmp/p3208-original.zip' | sha256sum --check
+          mkdir -p /tmp/p3208-evidence
+          unzip -q /tmp/p3208-original.zip -d /tmp/p3208-evidence
+          find /tmp/p3208-evidence -name P3202Generated.lean -print
+          test -f /tmp/p3208-evidence/p3203-evidence/A/P3202Generated.lean
+      - name: Build three Lean candidates from original A
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/p3208-build.py <<'PY_BUILD'
+          #!/usr/bin/env python3
+          """P320.8c: fixed theorem statement, not copied from target.
+          This is an experimental type-comparison harness, NOT an independently
+          attested source-to-Lean correspondence certificate.
+          """
+          from pathlib import Path
+          import sys
+          
+          REFERENCE = '''theorem p3208_trusted_reference
+              (v : Fin 3 → ℚ)
+              (hvlo : ∀ i, p34Cert.lo i ≤ v i)
+              (hvhi : ∀ i, v i ≤ p34Cert.hi i)
+              (hvsum : ∑ i, v i = 1) :
+              p34Cert.objective ≤ ∑ i, p34Cert.coeff i * v i := by
+            exact valid_box_certificate_optimal p34Cert p34Valid v hvlo hvhi hvsum
+          '''
+          MUTANT = '''theorem p34_instance_optimal : True := by
+            trivial
+          '''
+          AUDIT = '''
+          open Lean Elab Command
+          run_cmd do
+            let env ← getEnv
+            let target ← match env.find? `LNZ.p34_instance_optimal with
+              | some (.thmInfo info) => pure info
+              | _ => throwError "P3208_TARGET_NOT_THEOREM"
+            let reference ← match env.find? `LNZ.p3208_trusted_reference with
+              | some (.thmInfo info) => pure info
+              | _ => throwError "P3208_REFERENCE_NOT_THEOREM"
+            unless target.type == reference.type do
+              throwError "P3208_ELABORATED_TYPE_MISMATCH"
+            logInfo "P3208_ELABORATED_TYPE_MATCH"
+          '''
+          
+          def build(src: str, out: Path):
+              marker = 'theorem p34_instance_optimal\n'
+              if src.count(marker) != 1 or src.count('\n#print axioms LNZ.p34_instance_optimal') != 1:
+                  raise ValueError('UNEXPECTED_SOURCE_LAYOUT')
+              start = src.index(marker)
+              stop = src.index('\n#print axioms LNZ.p34_instance_optimal', start)
+              original = src[start:stop]
+              # The fixed reference is authored above, not derived from the target.
+              # Its proof is part of the experiment and must be compiled.
+              for name, theorem, audit in [
+                  ('P3208Original', original, True),
+                  ('P3208MutantValid', MUTANT, False),
+                  ('P3208MutantAudit', MUTANT, True),
+              ]:
+                  candidate = src[:start] + REFERENCE + '\n' + theorem + src[stop:]
+                  if audit:
+                      candidate = candidate.replace('\nend LNZ\n', '\n' + AUDIT + '\nend LNZ\n')
+                  (out / (name + '.lean')).write_text(candidate, encoding='utf-8')
+          
+          if __name__ == '__main__':
+              if len(sys.argv) != 3:
+                  sys.exit('usage: python3 build.py ORIGINAL_A_LEAN OUTPUT_DIRECTORY')
+              out = Path(sys.argv[2]); out.mkdir(parents=True, exist_ok=True)
+              build(Path(sys.argv[1]).read_text(encoding='utf-8'), out)
+              print('P3208C_FILES_PREPARED_NOT_COMPILED')
+          PY_BUILD
+          python3 /tmp/p3208-build.py /tmp/p3208-evidence/p3203-evidence/A/P3202Generated.lean /tmp/p3208-generated
+      - name: Compile dependencies and run elaborated type checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+          for m in LNZLowerBound LNZExchange LNZGlobalOptimality LNZCertificateBridge LNZCertificatePayloadP33; do
+            lake env lean -o "$m.olean" "$m.lean"
+          done
+          lake env lean /tmp/p3208-generated/P3208Original.lean > /tmp/p3208-original.log 2>&1
+          lake env lean /tmp/p3208-generated/P3208MutantValid.lean > /tmp/p3208-mutant-valid.log 2>&1
+          set +e
+          lake env lean /tmp/p3208-generated/P3208MutantAudit.lean > /tmp/p3208-mutant-audit.log 2>&1
+          audit_rc=$?
+          set -e
+          echo "$audit_rc" > /tmp/p3208-mutant-audit-exit.txt
+          test "$audit_rc" -ne 0 || { echo 'FAIL_MUTANT_ACCEPTED'; exit 1; }
+          grep -Fq 'P3208_ELABORATED_TYPE_MATCH' /tmp/p3208-original.log || { echo 'FAIL_ORIGINAL_AUDIT'; exit 1; }
+          grep -Fq 'P3208_ELABORATED_TYPE_MISMATCH' /tmp/p3208-mutant-audit.log || { echo 'FAIL_MUTANT_WRONG_REASON'; exit 1; }
+          echo 'P3208C_ELABORATED_TYPE_TEST_PASS'
+      - name: Upload logs and generated sources
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p3208c-evidence
+          path: |
+            /tmp/p3208-generated/*.lean
+            /tmp/p3208-*.log
+            /tmp/p3208-mutant-audit-exit.txt
+          if-no-files-found: warn
