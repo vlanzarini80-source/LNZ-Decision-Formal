@@ -1,0 +1,137 @@
+
+name: P320.2 Bound Lean Evidence
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - test/p316a-decision-contract
+    paths:
+      - 'p3202_bound_lean.py'
+      - 'test_p3202_bound_lean.py'
+      - '.github/workflows/p3202-bound-lean.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  bound-lean:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check Lean pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s lake-manifest.json
+          grep -Fxq 'leanprover/lean4:v4.24.0' lean-toolchain
+
+      - name: Prepare structured test documents
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from test_p320_source_contract import BASE
+          from p320_source_contract import canonical
+
+          raw = canonical(BASE)
+          Path('p3202-source.json').write_bytes(raw)
+          Path('p3202-formal.json').write_bytes(raw)
+          PY
+
+          python3 p3202_bound_lean.py prepare \
+            p3202-source.json p3202-formal.json
+
+          sha256sum P3202Generated.lean \
+            > p3202-before.sha256
+
+      - name: Install Lean
+        uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: true
+          use-mathlib-cache: true
+          build: false
+          test: false
+
+      - name: Compile dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+
+          for module in \
+            LNZLowerBound LNZExchange LNZGlobalOptimality \
+            LNZCertificateBridge LNZCertificatePayloadP33
+          do
+            lake env lean -o "$module.olean" "$module.lean"
+          done
+
+      - name: Compile exactly the bound Lean source
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+
+          cp P3202Generated.lean P34Generated.lean
+
+          set +e
+          lake env lean -o P34Generated.olean P34Generated.lean \
+            > p3202-positive.log 2>&1
+          result=$?
+          set -e
+
+          printf '%s\n' "$result" > p3202-exit.txt
+          sha256sum -c p3202-before.sha256
+          cmp -s P3202Generated.lean P34Generated.lean
+
+          if [ "$result" -ne 0 ]; then
+            cat p3202-positive.log
+            exit 1
+          fi
+
+      - name: Verify binding and adversarial mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 p3202_bound_lean.py check \
+            p3202-source.json p3202-formal.json \
+            p3202-positive.log p3202-exit.txt \
+            | tee p3202-check.log
+
+          python3 -m unittest -v test_p3202_bound_lean \
+            2>&1 | tee p3202-tests.log
+
+          grep -Eq '^Ran 9 tests in ' p3202-tests.log
+          grep -Fxq 'OK' p3202-tests.log
+
+      - name: Restore tracked source
+        if: always()
+        shell: bash
+        run: git restore P34Generated.lean || true
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p3202-bound-lean-evidence
+          if-no-files-found: warn
+          path: |
+            p3202-source.json
+            p3202-formal.json
+            p3202-contract.json
+            p3202-manifest.json
+            P3202Generated.lean
+            p3202-before.sha256
+            p3202-positive.log
+            p3202-exit.txt
+            p3202-check.log
+            p3202-tests.log
+            p3202-verdict.json
