@@ -1,0 +1,97 @@
+
+name: P320.3 Dual Certificate Adversarial Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      trusted_source_sha256:
+        description: 'Previously recorded SHA256 of A source, stored outside candidate bundle'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  dual-certificate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify Lean pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s lake-manifest.json
+          grep -Fxq 'leanprover/lean4:v4.24.0' lean-toolchain
+
+      - name: Generate two independent valid instances
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 p3203_dual_audit.py fixtures | tee p3203-fixtures.log
+
+      - name: Install Lean
+        uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: true
+          use-mathlib-cache: true
+          build: false
+          test: false
+
+      - name: Compile dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+          for module in LNZLowerBound LNZExchange LNZGlobalOptimality LNZCertificateBridge LNZCertificatePayloadP33; do
+            lake env lean -o "$module.olean" "$module.lean"
+          done
+
+      - name: Compile A and B from their own bound sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+          for label in A B; do
+            dir="p3203-evidence/$label"
+            (
+              cd "$dir"
+              PYTHONPATH=../.. python3 ../../p3202_bound_lean.py prepare source.json formal.json
+            )
+            cp "$dir/P3202Generated.lean" P34Generated.lean
+            set +e
+            lake env lean P34Generated.lean > "$dir/positive.log" 2>&1
+            code=$?
+            set -e
+            printf '%s\n' "$code" > "$dir/exit.txt"
+            test "$code" -eq 0 || { cat "$dir/positive.log"; exit 1; }
+            cmp "$dir/P3202Generated.lean" P34Generated.lean
+          done
+
+      - name: Adversarial proof swap and full coordinated replacement
+        env:
+          TRUSTED_SHA: ${{ inputs.trusted_source_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 p3203_dual_audit.py audit --trusted-sha256 "$TRUSTED_SHA" | tee p3203-audit.log
+          grep -q 'P3203_AUDIT_PASS' p3203-audit.log
+
+      - name: Restore source
+        if: always()
+        run: git restore P34Generated.lean || true
+
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p3203-dual-certificate-evidence
+          if-no-files-found: warn
+          path: |
+            p3203-fixtures.log
+            p3203-audit.log
+            p3203-evidence/
