@@ -1,0 +1,71 @@
+
+name: P320.1 Source to Formal Contract
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - test/p316a-decision-contract
+    paths:
+      - 'p320_source_contract.py'
+      - 'test_p320_source_contract.py'
+      - 'lnz_p34d.py'
+      - '.github/workflows/p3201-source-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  binding-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Record revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD | tee p3201-commit.txt
+          sha256sum \
+            lnz_p34d.py \
+            p320_source_contract.py \
+            test_p320_source_contract.py \
+            > p3201-source-hashes.txt
+
+      - name: Check Python syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            lnz_p34d.py \
+            p320_source_contract.py \
+            test_p320_source_contract.py
+
+      - name: Run adversarial tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest -v \
+            test_p320_source_contract \
+            2>&1 | tee p3201-tests.log
+
+          grep -Eq '^Ran 16 tests in ' \
+            p3201-tests.log
+
+          grep -Fxq 'OK' p3201-tests.log
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p3201-binding-evidence
+          if-no-files-found: warn
+          path: |
+            p3201-commit.txt
+            p3201-source-hashes.txt
+            p3201-tests.log
