@@ -1,0 +1,22 @@
+
+id,famiglia,modifica
+E1-00,controllo,prova originale su specifica fidata
+E1-01,conclusione,teorema sostituito da True
+E1-02,conclusione,disuguaglianza invertita
+E1-03,ipotesi,vincolo inferiore rimosso
+E1-04,ipotesi,vincolo superiore rimosso
+E1-05,ipotesi,vincolo di somma rimosso
+E1-06,dati,coefficiente alterato nel candidato
+E1-07,dati,obiettivo alterato nel candidato
+E1-08,definizioni,def locale omonima altera il significato
+E1-09,notazione,notazione ridefinita nel candidato
+E1-10,macro,macro altera elaborazione enunciato
+E1-11,assiomi,sorryAx introdotto
+E1-12,assiomi,assioma custom introdotto
+E1-13,assiomi,native_decide non autorizzato
+E1-14,provenienza,hash locale modificato con la specifica
+E1-15,provenienza,commit fidato sostituito
+E1-16,ipotesi,ipotesi contraddittorie introdotte
+E1-17,controllo,prova alternativa dello stesso enunciato
+E1-18,controllo,rinomina innocua di variabile legata
+E1-19,controllo,riordinamento innocuo della prova
