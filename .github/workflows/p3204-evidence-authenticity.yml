@@ -1,0 +1,50 @@
+
+name: P320.4a Evidence Authenticity Probe
+
+on:
+  push:
+    branches:
+      - test/p316a-decision-contract
+    paths:
+      - 'test_p3204_evidence_authenticity.py'
+      - '.github/workflows/p3204-evidence-authenticity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  evidence-authenticity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+
+      - name: Check Python syntax
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            test_p3204_evidence_authenticity.py \
+            p3202_bound_lean.py \
+            p3203_dual_audit.py
+
+      - name: Run adversarial evidence probe
+        run: |
+          set -euo pipefail
+          python3 -m unittest -v \
+            test_p3204_evidence_authenticity \
+            2>&1 | tee p3204-probe.log
+
+          grep -Fq \
+            'P3204_EVIDENCE_SPOOFING_DEMONSTRATED' \
+            p3204-probe.log
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p3204-evidence-authenticity
+          path: p3204-probe.log
+          if-no-files-found: warn
