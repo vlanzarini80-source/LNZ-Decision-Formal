@@ -1,0 +1,96 @@
+
+name: LNZ Lean 4.35 Concrete Bridge Audit
+
+on:
+  push:
+    branches:
+      - research/lean435-compatibility
+    paths:
+      - .github/workflows/lean435-concrete-bridge.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  concrete-bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout experimental revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm pinned environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fxq 'leanprover/lean4:v4.35.0' lean-toolchain
+          grep -Fq 'rev = "v4.35.0"' lakefile.toml
+          python3 - <<'PY'
+          import json
+          with open('lake-manifest.json', encoding='utf-8') as f:
+              manifest = json.load(f)
+          packages = [p for p in manifest['packages'] if p['name'] == 'mathlib']
+          assert len(packages) == 1, 'MATHLIB_NOT_UNIQUE'
+          assert packages[0]['inputRev'] == 'v4.35.0', 'MATHLIB_VERSION_MISMATCH'
+          print('MATHLIB_COMMIT:', packages[0]['rev'])
+          PY
+          sha256sum lake-manifest.json > lean435-manifest.sha256
+          git rev-parse HEAD > lean435-commit.txt
+
+      - name: Install selected Lean toolchain
+        uses: leanprover/lean-action@v1
+        with:
+          auto-config: false
+          use-github-cache: false
+          use-mathlib-cache: false
+          build: false
+          test: false
+
+      - name: Retrieve locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          lean --version | tee lean435-version.txt
+          lake --version | tee -a lean435-version.txt
+          lake exe cache get
+          sha256sum -c lean435-manifest.sha256
+
+      - name: Compile mathematical chain and concrete bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+          : > lean435-concrete-build.log
+          for m in \
+            LNZLowerBound \
+            LNZExchange \
+            LNZGlobalOptimality \
+            LNZCertificateBridge \
+            LNZCertificatePayloadP33 \
+            P34Generated \
+            P318ConcreteSpecProbe
+          do
+            echo "COMPILING $m" | tee -a lean435-concrete-build.log
+            lake env lean -o "$m.olean" "$m.lean" 2>&1 \
+              | tee -a lean435-concrete-build.log
+          done
+          sha256sum -c lean435-manifest.sha256
+          grep 'depends on axioms:' lean435-concrete-build.log \
+            > lean435-axioms.txt || true
+          echo 'ALL_SEVEN_MODULES_COMPILED'
+
+      - name: Preserve actual results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lnz435-concrete-bridge-evidence
+          if-no-files-found: warn
+          path: |
+            lean435-version.txt
+            lean435-commit.txt
+            lean435-manifest.sha256
+            lean435-concrete-build.log
+            lean435-axioms.txt
