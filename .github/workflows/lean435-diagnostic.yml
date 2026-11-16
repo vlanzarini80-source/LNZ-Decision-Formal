@@ -1,0 +1,109 @@
+
+name: LNZ Lean 4.35 Compatibility Diagnostic
+
+on:
+  push:
+    branches:
+      - research/lean435-compatibility
+    paths:
+      - .github/workflows/lean435-diagnostic.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify requested versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fxq 'leanprover/lean4:v4.35.0' lean-toolchain
+          grep -Fq 'rev = "v4.35.0"' lakefile.toml
+          echo "Version declarations verified"
+
+      - name: Install Lean without legacy cache
+        uses: leanprover/lean-action@v1
+        with:
+          auto-config: false
+          build: false
+          test: false
+          use-github-cache: false
+          use-mathlib-cache: false
+
+      - name: Resolve actual dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          lean --version
+          lake --version
+          lake update
+
+          python3 - <<'PY'
+          import json
+
+          with open("lake-manifest.json") as f:
+              manifest = json.load(f)
+
+          matches = [
+              p for p in manifest["packages"]
+              if p["name"] == "mathlib"
+          ]
+
+          assert len(matches) == 1, "MATHLIB_NOT_UNIQUE"
+          mathlib = matches[0]
+
+          assert mathlib.get("inputRev") == "v4.35.0", \
+              "MATHLIB_INPUT_REV_MISMATCH"
+
+          print("MATHLIB_RESOLVED_COMMIT:", mathlib["rev"])
+          PY
+
+          sha256sum lake-manifest.json \
+            > lean435-manifest.sha256
+
+      - name: Retrieve matching Mathlib cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          lake exe cache get
+
+      - name: Compile original mathematical core
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+
+          for m in \
+            LNZLowerBound \
+            LNZExchange \
+            LNZGlobalOptimality \
+            LNZCertificateBridge \
+            LNZCertificatePayloadP33
+          do
+            echo "COMPILING: $m"
+            lake env lean -o "$m.olean" "$m.lean" \
+              2>&1 | tee -a lean435-build.log
+          done
+
+          echo "LNZ435_CORE_COMPILE_PASS"
+
+      - name: Upload actual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lnz435-compatibility-evidence
+          if-no-files-found: warn
+          path: |
+            lake-manifest.json
+            lean435-manifest.sha256
+            lean435-build.log
