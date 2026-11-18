@@ -1,3 +1,4 @@
+
 name: P10 Isolated JSON-to-Lean E2E
 
 on:
@@ -33,15 +34,15 @@ jobs:
         run: |
           set -euo pipefail
           test -s lake-manifest.json
-          grep -Fxq 'leanprover/lean4:v4.24.0' lean-toolchain
+          grep -Fxq 'leanprover/lean4:v4.35.0' lean-toolchain
           python3 - <<'PY'
           import json
           with open('lake-manifest.json', encoding='utf-8') as f:
               data = json.load(f)
           mathlib = [p for p in data['packages'] if p['name'] == 'mathlib']
           assert len(mathlib) == 1
-          assert mathlib[0]['rev'] == 'f897ebcf72cd16f89ab4577d0c826cd14afaafc7'
-          assert mathlib[0]['inputRev'] == 'v4.24.0'
+          assert mathlib[0]['rev'] == '56a005855ea17e0b0958f73ec801ae140b0a1679'
+          assert mathlib[0]['inputRev'] == 'v4.35.0'
           print('PINNED_MATHLIB_CONFIRMED')
           PY
           sha256sum lake-manifest.json > /tmp/p10-manifest.sha256
