@@ -53,15 +53,17 @@ jobs:
           PY
 
           git rev-parse HEAD > p106-commit.txt
+
           sha256sum lake-manifest.json \
             > p106-manifest.sha256
 
-      - name: Generate independent test instance
+      - name: Generate and audit new certificate
         shell: bash
         run: |
           set -euo pipefail
 
           python3 - <<'PY'
+          import hashlib
           import json
           from fractions import Fraction
           from pathlib import Path
@@ -69,30 +71,100 @@ jobs:
           from lnz_p34d import process, Rejected
           from p310a_audit import audit, AuditError
 
+          def canonical_decimal(value):
+              q = Fraction(value)
+              denominator = q.denominator
+
+              a = 0
+              b = 0
+
+              while denominator % 2 == 0:
+                  denominator //= 2
+                  a += 1
+
+              while denominator % 5 == 0:
+                  denominator //= 5
+                  b += 1
+
+              if denominator != 1:
+                  raise ValueError(
+                      "Nonterminating decimal"
+                  )
+
+              digits = max(a, b)
+
+              if digits == 0:
+                  return str(q.numerator)
+
+              scaled = (
+                  q.numerator * (10 ** digits)
+              ) // q.denominator
+
+              sign = "-" if scaled < 0 else ""
+              absolute = str(abs(scaled)).zfill(
+                  digits + 1
+              )
+
+              whole = absolute[:-digits]
+              fractional = absolute[-digits:]
+              fractional = fractional.rstrip("0")
+
+              if not fractional:
+                  return sign + whole
+
+              return sign + whole + "." + fractional
+
           lo = ["0.2", "0.1", "0"]
           hi = ["0.8", "0.8", "1"]
           coeff = ["2", "5", "9"]
           witness = ["0.8", "0.2", "0"]
+          threshold = "5"
+
+          n = len(coeff)
+
+          L = [Fraction(x) for x in lo]
+          H = [Fraction(x) for x in hi]
+          C = [Fraction(x) for x in coeff]
+          W = [Fraction(x) for x in witness]
+          lam = Fraction(threshold)
+
+          assert n == len(L) == len(H) == len(W)
+          assert sum(W, Fraction(0)) == 1
+
+          for a, b, c, w in zip(L, H, C, W):
+              assert 0 <= a <= w <= b <= 1
+
+              if a < w:
+                  assert c <= lam
+
+              if w < b:
+                  assert lam <= c
 
           objective = sum(
-              Fraction(a) * Fraction(b)
-              for a, b in zip(coeff, witness)
+              (c * w for c, w in zip(C, W)),
+              Fraction(0),
           )
+
+          objective_decimal = canonical_decimal(
+              objective
+          )
+
+          assert Fraction(objective_decimal) == objective
 
           doc = {
               "schema_version": "PENSAI-LNZ-POC-0.2",
               "case_id": "LNZ_P106_NEW",
               "problem": {
                   "type": "box_simplex_min",
-                  "dimension": len(coeff),
+                  "dimension": n,
                   "lo": lo,
                   "hi": hi,
                   "coeff": coeff,
               },
               "certificate": {
                   "witness": witness,
-                  "threshold": "5",
-                  "objective": str(objective),
+                  "threshold": threshold,
+                  "objective": objective_decimal,
               },
               "evidence": {
                   "complete": True,
@@ -101,41 +173,53 @@ jobs:
           }
 
           raw = json.dumps(
-              doc, separators=(",", ":")
+              doc,
+              separators=(",", ":"),
           ).encode("utf-8")
 
           result = process(raw)
 
           assert result["verification"] == "VALID"
+          assert result["sha256_input"] == (
+              hashlib.sha256(raw).hexdigest()
+          )
 
           source = result["lean_source"]
 
           assert audit(raw, source) is True
 
           Path("p106-input.json").write_bytes(raw)
+
           Path("P106Generated.lean").write_text(
-              source, encoding="utf-8"
+              source,
+              encoding="utf-8",
           )
 
+          print("P106_EXACT_OBJECTIVE_PASS")
           print("P106_GENERATOR_VALIDATION_PASS")
           print("P106_JSON_TO_LEAN_AUDIT_PASS")
 
           bad = json.loads(raw)
-          bad["certificate"]["objective"] = str(
-              objective + Fraction(1)
+
+          bad["certificate"]["objective"] = (
+              canonical_decimal(
+                  objective + Fraction(1)
+              )
           )
 
           bad_raw = json.dumps(
-              bad, separators=(",", ":")
+              bad,
+              separators=(",", ":"),
           ).encode("utf-8")
 
           try:
               process(bad_raw)
-          except Rejected:
+          except Rejected as exc:
+              assert str(exc) == "objective_mismatch"
               print("P106_FALSE_OBJECTIVE_REJECTED")
           else:
               raise AssertionError(
-                  "Invalid objective was accepted"
+                  "False objective accepted"
               )
 
           mutated = source.replace(
@@ -152,11 +236,12 @@ jobs:
               print("P106_SOURCE_MUTATION_REJECTED")
           else:
               raise AssertionError(
-                  "Mutated Lean source was accepted"
+                  "Mutated source accepted"
               )
           PY
 
-          sha256sum p106-input.json \
+          sha256sum \
+            p106-input.json \
             P106Generated.lean \
             > p106-generated.sha256
 
@@ -168,7 +253,7 @@ jobs:
           build: false
           test: false
 
-      - name: Compile original proof dependencies
+      - name: Compile proof dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -199,41 +284,48 @@ jobs:
 
           echo "P106_DEPENDENCIES_COMPILED"
 
-      - name: Compile new mathematical certificate
+      - name: Compile new Lean certificate
         shell: bash
         run: |
           set -euo pipefail
 
           export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
 
+          sha256sum -c p106-generated.sha256
+
           lake env lean P106Generated.lean \
             2>&1 | tee p106-lean.log
 
-          grep -F \
-            'LNZ.p34_instance_optimal' \
-            p106-lean.log
+          python3 - <<'PY'
+          from pathlib import Path
 
-          grep -F \
-            'propext' \
-            p106-lean.log
+          log = Path(
+              "p106-lean.log"
+          ).read_text(encoding="utf-8")
 
-          grep -F \
-            'Classical.choice' \
-            p106-lean.log
+          assert (
+              "LNZ.p34_instance_optimal" in log
+          ), "Missing theorem audit"
 
-          grep -F \
-            'Quot.sound' \
-            p106-lean.log
+          assert (
+              "depends on axioms:" in log
+          ), "Missing axiom audit"
 
-          if grep -E \
-            'sorryAx|^.*error:' \
-            p106-lean.log; then
-            echo "P106_FORBIDDEN_AXIOM_OR_ERROR"
-            exit 1
-          fi
+          for forbidden in (
+              "sorryAx",
+              "Lean.ofReduceBool",
+              "unsafe",
+              "error:",
+          ):
+              assert forbidden not in log, (
+                  "Forbidden marker: " + forbidden
+              )
 
-          sha256sum -c p106-manifest.sha256
+          print("P106_AXIOM_AUDIT_PASS")
+          PY
+
           sha256sum -c p106-generated.sha256
+          sha256sum -c p106-manifest.sha256
 
           echo "P106_NEW_LEAN_CERTIFICATE_PASS"
 
