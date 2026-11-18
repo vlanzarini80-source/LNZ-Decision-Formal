@@ -3,6 +3,11 @@ name: P106 New Certificate Lean Verification
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - research/p106-open-source-lean-runner
+    paths:
+      - .github/workflows/p106-open-source-lean.yml
 
 permissions:
   contents: read
