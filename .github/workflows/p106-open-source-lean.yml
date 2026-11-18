@@ -1,0 +1,247 @@
+
+name: P106 New Certificate Lean Verification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  p106-new-certificate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify Lean and mathlib pins
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          grep -Fxq \
+            'leanprover/lean4:v4.35.0' \
+            lean-toolchain
+
+          python3 - <<'PY'
+          import json
+
+          with open("lake-manifest.json", encoding="utf-8") as f:
+              manifest = json.load(f)
+
+          mathlib = [
+              p for p in manifest["packages"]
+              if p["name"] == "mathlib"
+          ]
+
+          assert len(mathlib) == 1
+          assert mathlib[0]["rev"] == (
+              "56a005855ea17e0b0958f73ec801ae140b0a1679"
+          )
+          assert mathlib[0]["inputRev"] == "v4.35.0"
+
+          print("P106_TOOLCHAIN_PINS_PASS")
+          PY
+
+          git rev-parse HEAD > p106-commit.txt
+          sha256sum lake-manifest.json \
+            > p106-manifest.sha256
+
+      - name: Generate independent test instance
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import json
+          from fractions import Fraction
+          from pathlib import Path
+
+          from lnz_p34d import process, Rejected
+          from p310a_audit import audit, AuditError
+
+          lo = ["0.2", "0.1", "0"]
+          hi = ["0.8", "0.8", "1"]
+          coeff = ["2", "5", "9"]
+          witness = ["0.8", "0.2", "0"]
+
+          objective = sum(
+              Fraction(a) * Fraction(b)
+              for a, b in zip(coeff, witness)
+          )
+
+          doc = {
+              "schema_version": "PENSAI-LNZ-POC-0.2",
+              "case_id": "LNZ_P106_NEW",
+              "problem": {
+                  "type": "box_simplex_min",
+                  "dimension": len(coeff),
+                  "lo": lo,
+                  "hi": hi,
+                  "coeff": coeff,
+              },
+              "certificate": {
+                  "witness": witness,
+                  "threshold": "5",
+                  "objective": str(objective),
+              },
+              "evidence": {
+                  "complete": True,
+                  "noncompensatory_violation": False,
+              },
+          }
+
+          raw = json.dumps(
+              doc, separators=(",", ":")
+          ).encode("utf-8")
+
+          result = process(raw)
+
+          assert result["verification"] == "VALID"
+
+          source = result["lean_source"]
+
+          assert audit(raw, source) is True
+
+          Path("p106-input.json").write_bytes(raw)
+          Path("P106Generated.lean").write_text(
+              source, encoding="utf-8"
+          )
+
+          print("P106_GENERATOR_VALIDATION_PASS")
+          print("P106_JSON_TO_LEAN_AUDIT_PASS")
+
+          bad = json.loads(raw)
+          bad["certificate"]["objective"] = str(
+              objective + Fraction(1)
+          )
+
+          bad_raw = json.dumps(
+              bad, separators=(",", ":")
+          ).encode("utf-8")
+
+          try:
+              process(bad_raw)
+          except Rejected:
+              print("P106_FALSE_OBJECTIVE_REJECTED")
+          else:
+              raise AssertionError(
+                  "Invalid objective was accepted"
+              )
+
+          mutated = source.replace(
+              "BoxCertificate 3",
+              "BoxCertificate 4",
+              1,
+          )
+
+          assert mutated != source
+
+          try:
+              audit(raw, mutated)
+          except AuditError:
+              print("P106_SOURCE_MUTATION_REJECTED")
+          else:
+              raise AssertionError(
+                  "Mutated Lean source was accepted"
+              )
+          PY
+
+          sha256sum p106-input.json \
+            P106Generated.lean \
+            > p106-generated.sha256
+
+      - name: Install Lean 4.35.0 and mathlib
+        uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: true
+          use-mathlib-cache: true
+          build: false
+          test: false
+
+      - name: Compile original proof dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sha256sum -c p106-manifest.sha256
+
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+
+          lake env lean \
+            -o LNZLowerBound.olean \
+            LNZLowerBound.lean
+
+          lake env lean \
+            -o LNZExchange.olean \
+            LNZExchange.lean
+
+          lake env lean \
+            -o LNZGlobalOptimality.olean \
+            LNZGlobalOptimality.lean
+
+          lake env lean \
+            -o LNZCertificateBridge.olean \
+            LNZCertificateBridge.lean
+
+          lake env lean \
+            -o LNZCertificatePayloadP33.olean \
+            LNZCertificatePayloadP33.lean
+
+          echo "P106_DEPENDENCIES_COMPILED"
+
+      - name: Compile new mathematical certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+
+          lake env lean P106Generated.lean \
+            2>&1 | tee p106-lean.log
+
+          grep -F \
+            'LNZ.p34_instance_optimal' \
+            p106-lean.log
+
+          grep -F \
+            'propext' \
+            p106-lean.log
+
+          grep -F \
+            'Classical.choice' \
+            p106-lean.log
+
+          grep -F \
+            'Quot.sound' \
+            p106-lean.log
+
+          if grep -E \
+            'sorryAx|^.*error:' \
+            p106-lean.log; then
+            echo "P106_FORBIDDEN_AXIOM_OR_ERROR"
+            exit 1
+          fi
+
+          sha256sum -c p106-manifest.sha256
+          sha256sum -c p106-generated.sha256
+
+          echo "P106_NEW_LEAN_CERTIFICATE_PASS"
+
+      - name: Upload audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p106-new-certificate-audit
+          if-no-files-found: warn
+          path: |
+            p106-commit.txt
+            p106-input.json
+            P106Generated.lean
+            p106-manifest.sha256
+            p106-generated.sha256
+            p106-lean.log
