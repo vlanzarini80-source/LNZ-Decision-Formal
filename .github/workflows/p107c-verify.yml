@@ -2,6 +2,12 @@
 name: P107C Controlled JSON-to-Lean Verification
 
 on:
+  push:
+    branches:
+      - research/p106-open-source-lean-runner
+    paths:
+      - .github/workflows/p107c-verify.yml
+
   workflow_dispatch:
     inputs:
       request_id:
@@ -21,16 +27,46 @@ permissions:
   contents: read
 
 jobs:
+  branch_preflight:
+    name: P107C branch preflight only
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check original Python modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            lnz_p34d.py \
+            p310a_audit.py \
+            test_p311_independent.py
+
+          python3 p310a_audit.py --self-test
+          python3 test_p311_independent.py
+
+          echo "P107C_BRANCH_PREFLIGHT_PASS"
+          echo "NO_NEW_JSON_CERTIFICATE_COMPILED"
+
   verify:
+    name: P107C controlled Lean compilation
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+
     env:
       P107_REQUEST_ID: ${{ inputs.request_id }}
       P107_INPUT_SHA256: ${{ inputs.input_sha256 }}
       P107_PAYLOAD_B64: ${{ inputs.payload_b64 }}
 
     steps:
-      - name: Checkout research branch
+      - name: Checkout exact workflow commit
         uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -40,76 +76,137 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -Fxq 'leanprover/lean4:v4.35.0' lean-toolchain
+
+          grep -Fxq \
+            'leanprover/lean4:v4.35.0' \
+            lean-toolchain
+
           python3 - <<'PY'
           import json
-          m=json.load(open('lake-manifest.json',encoding='utf8'))
-          p=[x for x in m['packages'] if x['name']=='mathlib']
-          assert len(p)==1
-          assert p[0]['rev']=='56a005855ea17e0b0958f73ec801ae140b0a1679'
-          assert p[0]['inputRev']=='v4.35.0'
+
+          with open(
+              'lake-manifest.json',
+              encoding='utf8'
+          ) as f:
+              manifest = json.load(f)
+
+          packages = [
+              p for p in manifest['packages']
+              if p['name'] == 'mathlib'
+          ]
+
+          assert len(packages) == 1
+          assert packages[0]['rev'] == (
+              '56a005855ea17e0b0958f73ec801ae140b0a1679'
+          )
+          assert packages[0]['inputRev'] == 'v4.35.0'
+
           print('P107C_PINS_PASS')
           PY
 
-      - name: Validate input and generate original Lean source
+      - name: Validate JSON and generate original Lean
         shell: bash
         run: |
           set -euo pipefail
+
           python3 - <<'PY'
-          import base64,hashlib,json,os,re,subprocess,uuid
+          import base64
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          import uuid
+
           from pathlib import Path
           from lnz_p34d import process
           from p310a_audit import audit
 
-          rid=os.environ['P107_REQUEST_ID']
-          assert str(uuid.UUID(rid))==rid.lower(), 'invalid UUID'
+          rid = os.environ['P107_REQUEST_ID']
+          assert str(uuid.UUID(rid)) == rid.lower(), (
+              'invalid request UUID'
+          )
 
-          claimed=os.environ['P107_INPUT_SHA256']
-          assert re.fullmatch('[0-9a-f]{64}',claimed), 'invalid SHA256'
+          claimed = os.environ['P107_INPUT_SHA256']
+          assert re.fullmatch(
+              r'[0-9a-f]{64}', claimed
+          ), 'invalid SHA256'
 
-          encoded=os.environ['P107_PAYLOAD_B64']
-          assert len(encoded)<=10000, 'encoded input too large'
+          encoded = os.environ['P107_PAYLOAD_B64']
+          assert len(encoded) <= 10000, (
+              'encoded input too large'
+          )
 
-          raw=base64.b64decode(encoded,validate=True)
-          assert 0<len(raw)<=7000, 'decoded input too large'
-          assert hashlib.sha256(raw).hexdigest()==claimed, 'hash mismatch'
+          raw = base64.b64decode(
+              encoded, validate=True
+          )
 
-          result=process(raw)
-          assert result['verification']=='VALID'
-          assert result['sha256_input']==claimed
+          assert 0 < len(raw) <= 7000, (
+              'decoded input too large'
+          )
 
-          source=result['lean_source']
-          assert audit(raw,source) is True
-          assert process(raw)['lean_source']==source
-          assert len(source.encode('utf8'))<=2000000
+          actual_hash = hashlib.sha256(
+              raw
+          ).hexdigest()
 
-          checkout_sha=subprocess.check_output(
-              ['git','rev-parse','HEAD'],text=True
+          assert actual_hash == claimed, (
+              'input SHA256 mismatch'
+          )
+
+          result = process(raw)
+
+          assert result['verification'] == 'VALID'
+          assert result['sha256_input'] == claimed
+
+          source = result['lean_source']
+
+          assert audit(raw, source) is True
+          assert process(raw)['lean_source'] == source
+
+          assert len(
+              source.encode('utf8')
+          ) <= 2000000, 'Lean source too large'
+
+          checkout_sha = subprocess.check_output(
+              ['git', 'rev-parse', 'HEAD'],
+              text=True
           ).strip()
-          assert checkout_sha==os.environ['GITHUB_SHA'], 'checkout mismatch'
+
+          workflow_sha = os.environ['GITHUB_SHA']
+
+          assert checkout_sha == workflow_sha, (
+              'checkout commit mismatch'
+          )
 
           Path('p107c-input.json').write_bytes(raw)
-          Path('P107CGenerated.lean').write_text(source,encoding='utf8')
 
-          receipt={
-            'protocol':'LNZ-P107C-1',
-            'request_id':rid,
-            'input_sha256':claimed,
-            'lean_source_sha256':hashlib.sha256(
-                source.encode('utf8')
-            ).hexdigest(),
-            'workflow_commit_sha':os.environ['GITHUB_SHA'],
-            'checkout_commit_sha':checkout_sha,
-            'toolchain':'leanprover/lean4:v4.35.0',
-            'mathlib_rev':'56a005855ea17e0b0958f73ec801ae140b0a1679',
-            'lean_compiled':False,
-            'certified':False,
-            'status':'GENERATED_NOT_COMPILED'
+          Path('P107CGenerated.lean').write_text(
+              source, encoding='utf8'
+          )
+
+          receipt = {
+              'protocol': 'LNZ-P107C-1',
+              'request_id': rid,
+              'input_sha256': claimed,
+              'lean_source_sha256': hashlib.sha256(
+                  source.encode('utf8')
+              ).hexdigest(),
+              'workflow_commit_sha': workflow_sha,
+              'checkout_commit_sha': checkout_sha,
+              'toolchain': 'leanprover/lean4:v4.35.0',
+              'mathlib_rev': (
+                  '56a005855ea17e0b0958f73ec801ae140b0a1679'
+              ),
+              'lean_compiled': False,
+              'certified': False,
+              'status': 'GENERATED_NOT_COMPILED'
           }
 
           Path('p107c-receipt.json').write_text(
-              json.dumps(receipt,indent=2)+'\n'
+              json.dumps(receipt, indent=2) + '\n',
+              encoding='utf8'
           )
+
           print('P107C_GENERATION_AND_AUDIT_PASS')
           PY
 
@@ -125,65 +222,134 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
-          for module in LNZLowerBound LNZExchange LNZGlobalOptimality LNZCertificateBridge LNZCertificatePayloadP33; do
-            lake env lean -o "$module.olean" "$module.lean"
+
+          for module in \
+            LNZLowerBound \
+            LNZExchange \
+            LNZGlobalOptimality \
+            LNZCertificateBridge \
+            LNZCertificatePayloadP33
+          do
+            lake env lean \
+              -o "$module.olean" \
+              "$module.lean"
           done
 
-      - name: Compile new Lean certificate and finalize receipt
+      - name: Compile new certificate and audit result
         shell: bash
         run: |
           set -euo pipefail
+
           export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
-          sha256sum p107c-input.json P107CGenerated.lean > p107c-before.sha256
-          lake env lean P107CGenerated.lean 2>&1 | tee p107c-lean.log
+
+          sha256sum \
+            p107c-input.json \
+            P107CGenerated.lean \
+            > p107c-before.sha256
+
+          lake env lean P107CGenerated.lean \
+            2>&1 | tee p107c-lean.log
+
           sha256sum -c p107c-before.sha256
 
           python3 - <<'PY'
-          import hashlib,json,re
+          import hashlib
+          import json
+          import re
+
           from pathlib import Path
           from lnz_p34d import process
           from p310a_audit import audit
 
-          raw=Path('p107c-input.json').read_bytes()
-          src=Path('P107CGenerated.lean').read_text(encoding='utf8')
-          log=Path('p107c-lean.log').read_text(encoding='utf8')
-          receipt=json.loads(Path('p107c-receipt.json').read_text())
+          raw = Path(
+              'p107c-input.json'
+          ).read_bytes()
 
-          assert hashlib.sha256(raw).hexdigest()==receipt['input_sha256']
-          assert hashlib.sha256(src.encode()).hexdigest()==receipt['lean_source_sha256']
-          assert process(raw)['lean_source']==src
-          assert audit(raw,src) is True
-          assert receipt['checkout_commit_sha']==receipt['workflow_commit_sha']
+          source = Path(
+              'P107CGenerated.lean'
+          ).read_text(encoding='utf8')
 
-          assert 'LNZ.p34_instance_optimal' in log
+          log = Path(
+              'p107c-lean.log'
+          ).read_text(encoding='utf8')
 
-          matches=re.findall(
-              r'depends on axioms:\s*\[([^\]]*)\]',log
+          receipt_path = Path('p107c-receipt.json')
+
+          receipt = json.loads(
+              receipt_path.read_text(encoding='utf8')
           )
-          assert len(matches)==1, 'missing or ambiguous axiom report'
 
-          actual_axioms={
-              x.strip() for x in matches[0].split(',') if x.strip()
-          }
-          allowed_axioms={
-              'propext','Classical.choice','Quot.sound'
-          }
-          assert actual_axioms <= allowed_axioms, 'unexpected axioms'
+          assert hashlib.sha256(
+              raw
+          ).hexdigest() == receipt['input_sha256']
 
-          for bad in ('sorryAx','Lean.ofReduceBool','unsafe','error:'):
-              assert bad not in log, 'forbidden Lean marker: '+bad
+          assert hashlib.sha256(
+              source.encode('utf8')
+          ).hexdigest() == receipt['lean_source_sha256']
 
-          receipt['lean_log_sha256']=hashlib.sha256(
-              log.encode()
-          ).hexdigest()
-          receipt['lean_compiled']=True
-          receipt['status']='LEAN_COMPILED_AUDITED'
-          receipt['certified']=False
+          assert process(raw)['lean_source'] == source
+          assert audit(raw, source) is True
 
-          Path('p107c-receipt.json').write_text(
-              json.dumps(receipt,indent=2)+'\n'
+          assert (
+              receipt['checkout_commit_sha']
+              == receipt['workflow_commit_sha']
           )
+
+          matches = re.findall(
+              r'LNZ\.p34_instance_optimal\s+'
+              r'depends on axioms:\s*\[([^\]]*)\]',
+              log
+          )
+
+          assert len(matches) == 1, (
+              'missing or ambiguous Lean axiom report'
+          )
+
+          actual_axioms = {
+              x.strip()
+              for x in matches[0].split(',')
+              if x.strip()
+          }
+
+          allowed_axioms = {
+              'propext',
+              'Classical.choice',
+              'Quot.sound'
+          }
+
+          assert actual_axioms <= allowed_axioms, (
+              'unexpected Lean axioms'
+          )
+
+          for forbidden in (
+              'sorryAx',
+              'Lean.ofReduceBool',
+              'unsafe',
+              'error:'
+          ):
+              assert forbidden not in log, (
+                  'forbidden Lean marker: ' + forbidden
+              )
+
+          receipt['lean_log_sha256'] = (
+              hashlib.sha256(
+                  log.encode('utf8')
+              ).hexdigest()
+          )
+
+          receipt['lean_compiled'] = True
+          receipt['status'] = 'LEAN_COMPILED_AUDITED'
+
+          # CI evidence, not a signed independent attestation.
+          receipt['certified'] = False
+
+          receipt_path.write_text(
+              json.dumps(receipt, indent=2) + '\n',
+              encoding='utf8'
+          )
+
           print('P107C_NEW_INPUT_LEAN_COMPILED')
           PY
 
