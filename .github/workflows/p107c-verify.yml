@@ -297,9 +297,11 @@ jobs:
               == receipt['workflow_commit_sha']
           )
 
+          # P107C fix: match the actual Lean axiom
+          # report, including the quoted theorem name.
           matches = re.findall(
-              r'LNZ\.p34_instance_optimal\s+'
-              r'depends on axioms:\s*\[([^\]]*)\]',
+              r"(?m)^'LNZ\.p34_instance_optimal'"
+              r'\s+depends on axioms:\s*\[([^\]]*)\]',
               log
           )
 
