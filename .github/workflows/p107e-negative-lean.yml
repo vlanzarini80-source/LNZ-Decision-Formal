@@ -1,0 +1,151 @@
+name: P107E Negative Lean Proof Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      input_sha256:
+        description: SHA-256 of original valid JSON bytes
+        required: true
+        type: string
+      payload_b64:
+        description: Base64 of original valid JSON (max 7000 decoded bytes)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  negative_lean:
+    name: P107E positive control and negative Lean rejection
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      P107_INPUT_SHA256: ${{ inputs.input_sha256 }}
+      P107_PAYLOAD_B64: ${{ inputs.payload_b64 }}
+    steps:
+      - name: Checkout research source at audited commit
+        uses: actions/checkout@v4
+        with:
+          repository: vlanzarini80-source/LNZ-Decision-Formal
+          ref: af71d098060c281e7863552e8b828d9554449658
+          persist-credentials: false
+      - name: Verify exact source and dependency pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = af71d098060c281e7863552e8b828d9554449658
+          grep -Fxq 'leanprover/lean4:v4.35.0' lean-toolchain
+          python3 - <<'PY'
+          import json
+          m=json.load(open('lake-manifest.json',encoding='utf8'))
+          p=[p for p in m['packages'] if p['name']=='mathlib']
+          assert len(p)==1
+          assert p[0]['rev']=='56a005855ea17e0b0958f73ec801ae140b0a1679'
+          assert p[0]['inputRev']=='v4.35.0'
+          print('P107E_PINS_PASS')
+          PY
+      - name: Generate positive Lean and one invalid copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, json, os, re
+          from fractions import Fraction
+          from pathlib import Path
+          from lnz_p34d import process
+          from p310a_audit import audit
+          b64=os.environ['P107_PAYLOAD_B64']
+          assert len(b64)<=10000
+          raw=base64.b64decode(b64,validate=True)
+          assert 0<len(raw)<=7000
+          claimed=os.environ['P107_INPUT_SHA256']
+          assert re.fullmatch('[0-9a-f]{64}',claimed)
+          assert hashlib.sha256(raw).hexdigest()==claimed
+          result=process(raw)
+          assert result['verification']=='VALID'
+          source=result['lean_source']
+          assert audit(raw,source) is True
+          assert process(raw)['lean_source']==source
+          doc=json.loads(raw)
+          obj=Fraction(doc['certificate']['objective'])
+          bad=obj+Fraction(1,10)
+          def lean_q(q):
+              return f'(({q.numerator} : ℚ) / ({q.denominator} : ℚ))'
+          old='  objective := '+lean_q(obj)
+          new='  objective := '+lean_q(bad)
+          assert source.count(old)==1, 'unexpected generated objective syntax'
+          negative=source.replace(old,new,1)
+          assert negative!=source and negative.replace(new,old,1)==source
+          assert 'theorem p34_instance_optimal' in negative
+          assert 'private theorem p34Valid' in negative
+          Path('P107EPositive.lean').write_text(source,encoding='utf8')
+          Path('P107ENegative.lean').write_text(negative,encoding='utf8')
+          Path('p107e-input.json').write_bytes(raw)
+          Path('p107e-metadata.json').write_text(json.dumps({
+              'input_sha256':claimed,
+              'positive_source_sha256':hashlib.sha256(source.encode()).hexdigest(),
+              'negative_source_sha256':hashlib.sha256(negative.encode()).hexdigest(),
+              'mutation':'only certificate objective changed by +1/10',
+              'certified':False
+          },indent=2)+'\n',encoding='utf8')
+          print('P107E_INPUT_AND_SINGLE_MUTATION_PASS')
+          PY
+      - name: Install Lean and mathlib
+        uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: true
+          use-mathlib-cache: true
+          build: false
+          test: false
+      - name: Compile original dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+          for module in LNZLowerBound LNZExchange LNZGlobalOptimality LNZCertificateBridge LNZCertificatePayloadP33; do
+            lake env lean -o "$module.olean" "$module.lean"
+          done
+      - name: Compile positive and demand mathematical rejection of negative
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+          lake env lean P107EPositive.lean > p107e-positive.log 2>&1
+          echo P107E_POSITIVE_LEAN_PASS
+          set +e
+          lake env lean P107ENegative.lean > p107e-negative.log 2>&1
+          code=$?
+          set -e
+          cat p107e-negative.log
+          if [ "$code" -eq 0 ]; then
+            echo 'P107E_FAIL_FALSE_CERTIFICATE_ACCEPTED'
+            exit 1
+          fi
+          if ! grep -Eq '^P107ENegative\.lean:[0-9]+:[0-9]+: error:' p107e-negative.log; then
+            echo 'P107E_FAIL_NO_SOURCE_LOCALIZED_LEAN_ERROR'
+            exit 1
+          fi
+          if grep -Eiq 'unknown module|unknown identifier|file not found|invalid import|unknown package|failed to synthesize.*OfNat' p107e-negative.log; then
+            echo 'P107E_FAIL_ENVIRONMENT_OR_UNRELATED_ERROR'
+            exit 1
+          fi
+          if ! grep -Eq 'unsolved goals|numerals are different|is not equal|no goals to be solved|tactic.*failed|false' p107e-negative.log; then
+            echo 'P107E_INCONCLUSIVE_ERROR_NOT_CLASSIFIED'
+            exit 1
+          fi
+          echo 'P107E_NEGATIVE_LEAN_REJECTED'
+          echo 'P107E_CONTROLLED_NEGATIVE_TEST_PASS'
+      - name: Upload audit logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p107e-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          path: |
+            p107e-input.json
+            p107e-metadata.json
+            P107EPositive.lean
+            P107ENegative.lean
+            p107e-positive.log
+            p107e-negative.log
