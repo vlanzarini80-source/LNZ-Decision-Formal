@@ -1,0 +1,143 @@
+name: P107F Three-Way Lean Failure Classification
+
+on:
+  workflow_dispatch:
+    inputs:
+      input_sha256:
+        description: SHA-256 of original valid JSON bytes
+        required: true
+        type: string
+      payload_b64:
+        description: Base64 of original valid JSON (max 7000 decoded bytes)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      P107_INPUT_SHA256: ${{ inputs.input_sha256 }}
+      P107_PAYLOAD_B64: ${{ inputs.payload_b64 }}
+    steps:
+      - name: Checkout pinned research source
+        uses: actions/checkout@v4
+        with:
+          repository: vlanzarini80-source/LNZ-Decision-Formal
+          ref: af71d098060c281e7863552e8b828d9554449658
+          persist-credentials: false
+      - name: Check exact pins and prepare four controlled cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = af71d098060c281e7863552e8b828d9554449658
+          grep -Fxq 'leanprover/lean4:v4.35.0' lean-toolchain
+          python3 - <<'PY'
+          import base64,hashlib,json,os,re
+          from fractions import Fraction
+          from pathlib import Path
+          from lnz_p34d import process
+          from p310a_audit import audit
+          m=json.loads(Path('lake-manifest.json').read_text())
+          p=[p for p in m['packages'] if p['name']=='mathlib']
+          assert len(p)==1 and p[0]['rev']=='56a005855ea17e0b0958f73ec801ae140b0a1679'
+          assert p[0]['inputRev']=='v4.35.0'
+          raw=base64.b64decode(os.environ['P107_PAYLOAD_B64'],validate=True)
+          claimed=os.environ['P107_INPUT_SHA256']
+          assert 0<len(raw)<=7000 and re.fullmatch('[0-9a-f]{64}',claimed)
+          assert hashlib.sha256(raw).hexdigest()==claimed
+          result=process(raw)
+          assert result['verification']=='VALID'
+          src=result['lean_source']
+          assert audit(raw,src) is True
+          assert process(raw)['lean_source']==src
+          obj=Fraction(json.loads(raw)['certificate']['objective'])
+          def q(v):return f'(({v.numerator} : ℚ) / ({v.denominator} : ℚ))'
+          old='  objective := '+q(obj)
+          new='  objective := '+q(obj+Fraction(1,10))
+          assert src.count(old)==1
+          bad=src.replace(old,new,1)
+          assert bad.replace(new,old,1)==src
+          assert 'theorem p34_instance_optimal' in src
+          Path('P107FPositive.lean').write_text(src)
+          Path('P107FNegative.lean').write_text(bad)
+          # Inject a guaranteed parser error, leaving the original theorem untouched.
+          Path('P107FSyntax.lean').write_text('this is not valid Lean syntax !!!\n')
+          # Import a deliberately nonexistent module, not a mathematical statement.
+          Path('P107FEnvironment.lean').write_text('import P107FDefinitelyMissingModule\n')
+          Path('p107f-input.json').write_bytes(raw)
+          Path('p107f-metadata.json').write_text(json.dumps({
+            'input_sha256':claimed,
+            'positive_sha256':hashlib.sha256(src.encode()).hexdigest(),
+            'negative_sha256':hashlib.sha256(bad.encode()).hexdigest(),
+            'negative_mutation':'certificate objective +1/10 only',
+            'certified':False
+          },indent=2)+'\n')
+          print('P107F_GENERATION_PASS')
+          PY
+      - name: Install Lean and mathlib
+        uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: true
+          use-mathlib-cache: true
+          build: false
+          test: false
+      - name: Compile original dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+          for module in LNZLowerBound LNZExchange LNZGlobalOptimality LNZCertificateBridge LNZCertificatePayloadP33; do
+            lake env lean -o "$module.olean" "$module.lean"
+          done
+      - name: Execute and independently classify all cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LEAN_PATH="$(pwd):${LEAN_PATH:-}"
+          python3 - <<'PY'
+          import json,os,re,subprocess
+          from pathlib import Path
+          cases=['Positive','Negative','Syntax','Environment']
+          records={}
+          for case in cases:
+              path=f'P107F{case}.lean'
+              p=subprocess.run(['lake','env','lean',path],capture_output=True,text=True,timeout=90)
+              log=p.stdout+p.stderr
+              Path(f'p107f-{case.lower()}.log').write_text(log)
+              records[case]={'exit_code':p.returncode,'log':log}
+          pos=records['Positive']
+          neg=records['Negative']
+          syn=records['Syntax']
+          env=records['Environment']
+          # Classifications are tied to exact, controlled files and expected diagnostics.
+          assert pos['exit_code']==0, 'P107F_POSITIVE_FAILED'
+          assert 'sorryAx' not in pos['log'], 'P107F_POSITIVE_SORRY_AXIOM'
+          assert neg['exit_code']!=0, 'P107F_FALSE_CERTIFICATE_ACCEPTED'
+          assert re.search(r'P107FNegative\.lean:\d+:\d+: error: unsolved goals',neg['log']), 'P107F_NEGATIVE_NOT_MATH_ERROR'
+          assert re.search(r'⊢\s*False\b',neg['log']), 'P107F_NEGATIVE_FALSE_GOAL_NOT_FOUND'
+          assert syn['exit_code']!=0, 'P107F_BAD_SYNTAX_ACCEPTED'
+          assert re.search(r'P107FSyntax\.lean:\d+:\d+: error:',syn['log']), 'P107F_SYNTAX_NO_SOURCE_ERROR'
+          assert not re.search(r'unsolved goals\s*\n.*⊢\s*False',syn['log']), 'P107F_SYNTAX_MISCLASSIFIED'
+          assert env['exit_code']!=0, 'P107F_MISSING_MODULE_ACCEPTED'
+          assert ('unknown module' in env['log'].lower() or 'unknown package' in env['log'].lower() or 'object file' in env['log'].lower()), 'P107F_ENVIRONMENT_NOT_CLASSIFIED'
+          verdicts={'Positive':'VALID_PROOF','Negative':'MATHEMATICAL_REJECTION','Syntax':'SYNTAX_ERROR','Environment':'ENVIRONMENT_ERROR'}
+          # Any mismatch above fails CI, rather than being called a mathematical rejection.
+          Path('p107f-verdicts.json').write_text(json.dumps({'verdicts':verdicts,'certified':False},indent=2)+'\n')
+          for case in cases:
+              print('P107F_'+case.upper()+'_'+verdicts[case])
+          print('P107F_FOUR_CLASS_CONTROLLED_TEST_PASS')
+          PY
+      - name: Upload logs and verdicts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p107f-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          path: |
+            p107f-*.json
+            p107f-*.log
+            P107F*.lean
