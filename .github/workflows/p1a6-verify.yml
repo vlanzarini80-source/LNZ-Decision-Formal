@@ -1,0 +1,236 @@
+
+# LNZ P1A6: manual smoke test or app-supplied arithmetic request.
+name: LNZ P1A6 Formal Arithmetic Runner
+run-name: P1A6 ${{ inputs.request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        required: false
+        type: string
+        default: ''
+      input_sha256:
+        required: false
+        type: string
+        default: ''
+      payload_b64:
+        required: false
+        type: string
+        default: ''
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout pinned Lean project
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: vlanzarini80-source/LNZ-Decision-Formal
+          ref: af71d098060c281e7863552e8b828d9554449658
+          persist-credentials: false
+      - name: Install pinned Lean and Mathlib cache
+        uses: leanprover/lean-action@ba3fdfe5c4476c925da13bf11a005ddb47e47aee
+        with:
+          use-github-cache: true
+          use-mathlib-cache: true
+          build: false
+          test: false
+      - name: Execute independently replayed arithmetic proof
+        shell: bash
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          INPUT_SHA256: ${{ inputs.input_sha256 }}
+          PAYLOAD_B64: ${{ inputs.payload_b64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/p1a6-worker"
+          cat > "$RUNNER_TEMP/p1a6-worker/bridge.py" <<'LNZ_BRIDGE_PY'
+          """P1A.5: strict AST rendering; independent replay before candidate generation."""
+          import hashlib,json,re
+          from fractions import Fraction
+          from pathlib import Path
+
+          def sha(b): return hashlib.sha256(b).hexdigest()
+          def canonical(o): return json.dumps(o,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode()
+          def integer(s):
+              if type(s) is not str or len(s)>1235 or not re.fullmatch(r'0|-?[1-9][0-9]*',s): raise ValueError('INTEGER')
+              n=int(s)
+              if abs(n).bit_length()>4096: raise ValueError('BITS')
+              return n
+
+          def rational(n,d): return f'(({n} : ℚ) / ({d} : ℚ))'
+
+          def translate(ast):
+              nodes=0; guards=[]; trace=[]
+              def visit(x,depth):
+                  nonlocal nodes
+                  nodes+=1
+                  if nodes>256 or depth>32 or type(x) is not dict: raise ValueError('AST_LIMIT_OR_TYPE')
+                  o=x.get('op')
+                  if o=='rat' and set(x)=={'op','n','d'}:
+                      n,d=integer(x['n']),integer(x['d']); v=Fraction(n,d); s=rational(n,d); guards.append(f'({d} : ℚ) ≠ 0')
+                  elif o=='neg' and set(x)=={'op','arg'}:
+                      a,av=visit(x['arg'],depth+1); s=f'(-{a})'; v=-av
+                  elif o in ('add','sub','mul','div') and set(x)=={'op','left','right'}:
+                      a,av=visit(x['left'],depth+1); b,bv=visit(x['right'],depth+1)
+                      symbol={'add':'+','sub':'-','mul':'*','div':'/'}[o]; s=f'({a} {symbol} {b})'
+                      if o=='add': v=av+bv
+                      elif o=='sub': v=av-bv
+                      elif o=='mul': v=av*bv
+                      else: v=av/bv; guards.append(f'{b} ≠ 0')
+                  else: raise ValueError('SCHEMA')
+                  if max(abs(v.numerator).bit_length(),v.denominator.bit_length())>4096: raise ValueError('BITS')
+                  trace.append({'op':o,'n':str(v.numerator),'d':str(v.denominator)})
+                  return s,v
+              s,v=visit(ast,0)
+              return s,v,guards,trace
+
+          def prepare(ast,response):
+              s,v,g,t=translate(ast)
+              expected={'status':'EXACT_COMPUTED','result':{'n':str(v.numerator),'d':str(v.denominator)},'trace':t,'certified':False,'lean_executed':False}
+              if canonical(expected)!=canonical(response): raise ValueError('REPLAY_MISMATCH')
+              # RHS is the actual oracle response, never substituted with reference values.
+              n=integer(response['result']['n']); d=integer(response['result']['d'])
+              return s,rational(n,d),g,v
+
+          HEADER='import Mathlib.Tactic.NormNum\nimport Mathlib.Data.Rat.Lemmas\nset_option maxRecDepth 4096\nset_option maxHeartbeats 2000000\nset_option warningAsError true\n\nnamespace LNZP1A5\n'
+
+          def declarations(name,ast,response,negative_control=False):
+              if not re.fullmatch(r'c[0-9]{4}',name): raise ValueError('NAME')
+              s,r,g,v=prepare(ast,response)
+              props=[(f'{name}_nz{i:03}',p) for i,p in enumerate(g)]+[(f'{name}_eq',f'{s} = {r}')]
+              if negative_control: props.append((f'{name}_false_rejected',f'{s} ≠ {rational(v.numerator+v.denominator,v.denominator)}'))
+              return props
+
+          def render(props):
+              return HEADER+''.join(f'theorem {name} : {p} := by\n  norm_num\n#print axioms {name}\n\n' for name,p in props)+'end LNZP1A5\n'
+
+          def false_source(name,ast,response):
+              s,r,g,v=prepare(ast,response)
+              return HEADER+f'theorem {name}_wrong : {s} = {rational(v.numerator+v.denominator,v.denominator)} := by\n  norm_num\nend LNZP1A5\n'
+          LNZ_BRIDGE_PY
+          cat > "$RUNNER_TEMP/p1a6-worker/worker.py" <<'LNZ_WORKER_PY'
+          import base64, hashlib, json, re, subprocess, sys, time
+          from pathlib import Path
+          from bridge import canonical,sha,prepare,declarations,render,false_source
+          ALLOWED={'propext','Classical.choice','Quot.sound'}
+          PIN='af71d098060c281e7863552e8b828d9554449658'
+          ML='56a005855ea17e0b0958f73ec801ae140b0a1679'
+          TOOL='leanprover/lean4:v4.35.0'
+          def require(b,code):
+              if not b: raise ValueError(code)
+          def unique_pairs(pairs):
+              d={}
+              for k,v in pairs:
+                  require(k not in d,'DUPLICATE_KEY')
+                  d[k]=v
+              return d
+          def decode_request(b64,digest,request_id):
+              require(re.fullmatch(r'[0-9a-f]{64}',digest) is not None,'DIGEST')
+              require(re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',request_id) is not None,'REQUEST_ID')
+              require(len(b64)<=10000,'PAYLOAD_LIMIT')
+              raw=base64.b64decode(b64,validate=True)
+              require(len(raw)<=7000 and sha(raw)==digest,'INPUT_HASH')
+              doc=json.loads(raw,object_pairs_hook=unique_pairs)
+              require(type(doc) is dict and set(doc)=={'protocol','request_id','ast','oracle_response','source_sha256'},'PAYLOAD_SCHEMA')
+              require(doc['protocol']=='LNZ-P1A6-1' and doc['request_id']==request_id and canonical(doc)==raw,'REQUEST_BINDING')
+              props=declarations('c0000',doc['ast'],doc['oracle_response'])
+              source=render(props).encode()
+              require(sha(source)==doc['source_sha256'],'SOURCE_MISMATCH')
+              # The reference replay checks every operation and trace; RHS remains the oracle's actual result.
+              negative=false_source('c0000',doc['ast'],doc['oracle_response']).encode()
+              return raw,doc,props,source,negative
+          def run_job(project,out,b64,digest,request_id):
+              out.mkdir(parents=True,exist_ok=False)
+              receipt={'protocol':'LNZ-P1A6-RECEIPT-1','request_id':request_id,'input_sha256':digest,'status':'FAILED_OR_BLOCKED','certified':False,'authentication_verified':False,'lean_executed':False,'axioms_audited':False,'files':{}}
+              def put(name,data):
+                  (out/name).write_bytes(data)
+                  receipt['files'][name]={'sha256':sha(data)}
+              def command(args,name,timeout=90):
+                  start=time.monotonic()
+                  try:
+                      r=subprocess.run(args,cwd=project,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=timeout)
+                      code,log=r.returncode,r.stdout
+                  except subprocess.TimeoutExpired as e:
+                      code,log=124,(e.stdout or b'')+b'\nTIMEOUT\n'
+                  put(name,log)
+                  receipt['files'][name].update(exit_code=code,elapsed_ms=round(1000*(time.monotonic()-start)))
+                  return code,log.decode('utf8',errors='replace')
+              try:
+                  raw,doc,props,source,negative=decode_request(b64,digest,request_id)
+                  put('request.json',raw);put('Positive.lean',source);put('Negative.lean',negative)
+                  receipt['source_sha256']=sha(source)
+                  receipt['statements']=[{'name':n,'statement_sha256':sha(s.encode())} for n,s in props]
+                  code,rev=command(['git','rev-parse','HEAD'],'project-revision.log')
+                  require(code==0 and rev.strip()==PIN,'PROJECT_PIN')
+                  require((project/'lean-toolchain').read_text().strip()==TOOL,'TOOLCHAIN_PIN')
+                  manifest=(project/'lake-manifest.json').read_bytes()
+                  packages=json.loads(manifest)['packages']
+                  require([x['rev'] for x in packages if x['name']=='mathlib']==[ML],'MANIFEST_PIN')
+                  code,rev=command(['git','-C',str(project/'.lake/packages/mathlib'),'rev-parse','HEAD'],'mathlib-revision.log')
+                  require(code==0 and rev.strip()==ML,'MATHLIB_PIN')
+                  code,dirty=command(['git','-C',str(project/'.lake/packages/mathlib'),'status','--porcelain','--untracked-files=no'],'mathlib-status.log')
+                  require(code==0 and not dirty.strip(),'MATHLIB_DIRTY')
+                  code,version=command(['lake','env','lean','--version'],'lean-version.log')
+                  require(code==0 and 'version 4.35.0,' in version,'LEAN_VERSION')
+                  receipt.update(toolchain=TOOL,mathlib_rev=ML,project_commit=PIN,manifest_sha256=sha(manifest))
+                  code,log=command(['lake','env','lean',str(out/'Positive.lean')],'positive.log')
+                  receipt['lean_executed']=True
+                  require(code==0 and not re.search(r'\b(error|warning):',log),'POSITIVE_FAILED')
+                  audits={}
+                  for m in re.finditer(r"'LNZP1A5\.([A-Za-z0-9_]+)' (?:depends on axioms: \[([^\]]*)\]|does not depend on any axioms)",log):
+                      n=m.group(1);a={s.strip() for s in (m.group(2) or '').split(',') if s.strip()}
+                      require(n not in audits and a<=ALLOWED,'AXIOM_REJECTED')
+                      audits[n]=sorted(a)
+                  require(set(audits)=={n for n,s in props},'AUDIT_INCOMPLETE')
+                  receipt.update(axioms_audited=True,theorem_axioms=audits)
+                  code,log=command(['lake','env','lean',str(out/'Negative.lean')],'negative.log')
+                  errors=re.findall(r'^.*?:([0-9]+):[0-9]+: error: ([^\n]*)',log,re.M)
+                  line=next(i for i,s in enumerate(negative.decode().splitlines(),1) if s.startswith('theorem '))
+                  require(code==1 and len(errors)==1 and errors[0][1]=='unsolved goals' and int(errors[0][0]) in (line,line+1) and '⊢ False' in log and 'warning:' not in log,'NEGATIVE_NOT_CLASSIFIED')
+                  require(all(sha((out/n).read_bytes())==m['sha256'] for n,m in receipt['files'].items()),'POST_RUN_HASH')
+                  receipt.update(status='LEAN_COMPILED_AXIOMS_AUDITED_LOCAL',positive_theorems=len(props),negative_rejections=1)
+              except Exception as e:
+                  receipt['reason']=str(e)
+              data=canonical(receipt)
+              (out/'receipt.json').write_bytes(data)
+              (out/'receipt.sha256').write_text(sha(data)+'  receipt.json\n')
+              return receipt
+          if __name__=='__main__':
+              project=Path(sys.argv[1]).resolve();out=Path(sys.argv[2]).resolve()
+              request=json.loads(Path(sys.argv[3]).read_text())
+              result=run_job(project,out,request['payload_b64'],request['input_sha256'],request['request_id'])
+              print(json.dumps(result,indent=2))
+              sys.exit(0 if result['status']=='LEAN_COMPILED_AXIOMS_AUDITED_LOCAL' else 1)
+          LNZ_WORKER_PY
+          python3 - <<'LNZ_REQUEST_PY'
+          import os,json,sys,base64,uuid
+          from pathlib import Path
+          p=Path(os.environ['RUNNER_TEMP'])/'p1a6-worker'/'request.json'
+          req={k.lower():os.environ[k] for k in ('REQUEST_ID','INPUT_SHA256','PAYLOAD_B64')}
+          if not any(req.values()):
+              # Manual smoke test only: no app-origin or production claim.
+              sys.path.insert(0,str(p.parent))
+              from bridge import translate,canonical,sha,declarations,render
+              ast={'op':'div','left':{'op':'rat','n':'17','d':'31'},'right':{'op':'rat','n':'13','d':'19'}}
+              _,v,_,trace=translate(ast)
+              response={'status':'EXACT_COMPUTED','result':{'n':str(v.numerator),'d':str(v.denominator)},'trace':trace,'certified':False,'lean_executed':False}
+              rid=str(uuid.uuid4())
+              source=render(declarations('c0000',ast,response)).encode()
+              payload=canonical({'protocol':'LNZ-P1A6-1','request_id':rid,'ast':ast,'oracle_response':response,'source_sha256':sha(source)})
+              req={'request_id':rid,'input_sha256':sha(payload),'payload_b64':base64.b64encode(payload).decode()}
+              print('MANUAL_SMOKE_ONLY',rid)
+          elif not all(req.values()):
+              raise ValueError('ALL_THREE_INPUTS_REQUIRED')
+          p.write_text(json.dumps(req))
+          LNZ_REQUEST_PY
+          python3 "$RUNNER_TEMP/p1a6-worker/worker.py" "$PWD" "$RUNNER_TEMP/p1a6-evidence" "$RUNNER_TEMP/p1a6-worker/request.json"
+      - name: Upload source-bound evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p1a6-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p1a6-evidence/
+          if-no-files-found: error
