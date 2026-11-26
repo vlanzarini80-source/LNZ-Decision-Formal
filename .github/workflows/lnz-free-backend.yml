@@ -1,0 +1,65 @@
+name: LNZ free execution backend
+on:
+  push:
+    branches: [research/isolated-lean-worker]
+    paths: [.github/workflows/lnz-free-backend.yml, worker/actions_backend.py]
+  workflow_dispatch:
+    inputs:
+      request_json:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Prepare Lean
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/leanprover/lean4/releases/download/v4.24.0/lean-4.24.0-linux.tar.zst -o "$RUNNER_TEMP/lean.tar.zst"
+          mkdir -p "$RUNNER_TEMP/lean-dist"
+          tar --zstd -xf "$RUNNER_TEMP/lean.tar.zst" -C "$RUNNER_TEMP/lean-dist" --strip-components=1
+          chmod -R a+rX "$RUNNER_TEMP/lean-dist"
+          docker pull ubuntu:24.04
+          echo "LNZ_IMAGE_ID=$(docker image inspect ubuntu:24.04 --format '{{.Id}}')" >> "$GITHUB_ENV"
+          echo "LNZ_LEAN_DIST=$RUNNER_TEMP/lean-dist" >> "$GITHUB_ENV"
+      - name: Batch verification
+        env:
+          PYTHONPATH: worker
+          LNZ_REQUEST_JSON: ${{ inputs.request_json }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            python3 worker/actions_backend.py
+          else
+            python3 - <<'PY'
+          import hashlib,json,uuid
+          from actions_backend import run
+          from dynamic_proof import TARGETS
+          results=[]
+          for target,proof,expected in [
+              ("reverse_append","by\n  exact List.reverse_append","ACCEPTED"),
+              ("false_control","by\n  decide","REJECTED"),
+              ("reverse_append","by\n  sorry","REJECTED")]:
+              q=dict(protocol="LNZ-WORKER-1",requestId=str(uuid.uuid4()),statement=TARGETS[target],proof=proof,timeoutSeconds=120)
+              for k in ("statement","proof"):
+                  q[k+"Hash"]=hashlib.sha256(q[k].encode()).hexdigest()
+              r=run(json.dumps(q).encode())
+              assert r["status"]==expected and not r["certified"],r
+              results.append(r)
+          open("lnz-receipt.json","w").write(json.dumps(results,indent=2))
+          print("LNZ_FREE_BATCH_PROBE_PASS")
+          PY
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: lnz-receipt
+          path: lnz-receipt.json
+          retention-days: 3
+          if-no-files-found: error
