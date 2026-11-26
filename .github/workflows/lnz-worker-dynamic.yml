@@ -1,0 +1,61 @@
+name: LNZ dynamic proof verification
+on:
+  push:
+    branches: [research/isolated-lean-worker]
+    paths:
+      - worker/dynamic_proof.py
+      - worker/test_dynamic_proof.py
+      - .github/workflows/lnz-worker-dynamic.yml
+permissions:
+  contents: read
+jobs:
+  dynamic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s worker -p test_dynamic_proof.py -v
+      - name: Prepare Lean
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/leanprover/lean4/releases/download/v4.24.0/lean-4.24.0-linux.tar.zst -o "$RUNNER_TEMP/lean.tar.zst"
+          sha256sum "$RUNNER_TEMP/lean.tar.zst"
+          mkdir -p "$RUNNER_TEMP/lean-dist" "$RUNNER_TEMP/lnz-input"
+          tar --zstd -xf "$RUNNER_TEMP/lean.tar.zst" -C "$RUNNER_TEMP/lean-dist" --strip-components=1
+          docker pull ubuntu:24.04
+      - name: Generate and verify candidate proofs
+        run: |
+          set -euo pipefail
+          export PYTHONPATH="$PWD/worker"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from dynamic_proof import build
+          p=Path(os.environ["RUNNER_TEMP"])/"lnz-input"
+          for name,target,tactics in [("Positive","reverse_append",["exact List.reverse_append"]),("Wrong","reverse_append",["rfl"]),("False","false_control",["decide"])]:
+              source,digest=build(target,tactics)
+              (p/(name+".lean")).write_text(source)
+              print(name,digest)
+          PY
+          chmod -R a+rX "$RUNNER_TEMP/lean-dist" "$RUNNER_TEMP/lnz-input"
+          image="$(docker image inspect ubuntu:24.04 --format '{{.Id}}')"
+          run_lean() {
+            local name="lnz-dynamic-$1" rc=0
+            timeout --kill-after=5s 120s docker run --name "$name" --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 64 --memory 2g --cpus 2 --user 65534:65534 --tmpfs /tmp:rw,noexec,nosuid,size=64m -v "$RUNNER_TEMP/lean-dist:/opt/lean:ro" -v "$RUNNER_TEMP/lnz-input:/input:ro" "$image" /opt/lean/bin/lean "/input/$1.lean" || rc=$?
+            docker rm -f "$name" >/dev/null 2>&1 || true
+            return "$rc"
+          }
+          run_lean Positive > "$RUNNER_TEMP/positive.log" 2>&1
+          cat "$RUNNER_TEMP/positive.log"
+          python3 -c 'import sys; from dynamic_proof import audit; assert audit(open(sys.argv[1]).read())' "$RUNNER_TEMP/positive.log"
+          for name in Wrong False; do
+            rc=0
+            run_lean "$name" > "$RUNNER_TEMP/$name.log" 2>&1 || rc=$?
+            cat "$RUNNER_TEMP/$name.log"
+            test "$rc" -eq 1
+            grep -E 'error:.*(rfl|decide|False|definitional)' "$RUNNER_TEMP/$name.log"
+          done
+          sha256sum "$RUNNER_TEMP/lnz-input/"*.lean "$RUNNER_TEMP/"{positive,Wrong,False}.log
+          echo RESTRICTED_DYNAMIC_PROOF_PROBE_PASS
