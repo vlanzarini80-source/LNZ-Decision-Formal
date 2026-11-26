@@ -1,0 +1,24 @@
+[Unit]
+Description=LNZ restricted Lean worker
+After=docker.service network.target
+Requires=docker.service
+[Service]
+Type=simple
+User=lnz-worker
+Group=lnz-worker
+SupplementaryGroups=docker
+WorkingDirectory=/opt/lnz/worker
+EnvironmentFile=/etc/lnz/worker.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /opt/lnz/worker/real_bridge.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+UMask=0077
+TasksMax=128
+MemoryMax=512M
+[Install]
+WantedBy=multi-user.target
