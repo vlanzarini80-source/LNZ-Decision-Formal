@@ -1,0 +1,73 @@
+name: LNZ real bridge execution
+on:
+  push:
+    branches: [research/isolated-lean-worker]
+    paths: [worker/real_bridge.py, worker/bridge.py, worker/test_bridge.py, .github/workflows/lnz-real-bridge.yml]
+permissions:
+  contents: read
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s worker -p 'test_*.py' -v
+      - name: Prepare Lean
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/leanprover/lean4/releases/download/v4.24.0/lean-4.24.0-linux.tar.zst -o "$RUNNER_TEMP/lean.tar.zst"
+          sha256sum "$RUNNER_TEMP/lean.tar.zst"
+          mkdir -p "$RUNNER_TEMP/lean-dist"
+          tar --zstd -xf "$RUNNER_TEMP/lean.tar.zst" -C "$RUNNER_TEMP/lean-dist" --strip-components=1
+          chmod -R a+rX "$RUNNER_TEMP/lean-dist"
+          docker pull ubuntu:24.04
+          echo "LNZ_IMAGE_ID=$(docker image inspect ubuntu:24.04 --format '{{.Id}}')" >> "$GITHUB_ENV"
+          echo "LNZ_LEAN_DIST=$RUNNER_TEMP/lean-dist" >> "$GITHUB_ENV"
+      - name: Real HTTP verification
+        env:
+          PYTHONPATH: worker
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, secrets, subprocess, sys, time, socket, json, hashlib, uuid, urllib.request, urllib.error
+          from dynamic_proof import TARGETS
+          token=secrets.token_hex(32)
+          env=dict(os.environ,LNZ_LEAN_WORKER_TOKEN=token)
+          server=subprocess.Popen([sys.executable,"worker/real_bridge.py"],env=env)
+          try:
+              for i in range(50):
+                  if server.poll() is not None: raise RuntimeError("server stopped")
+                  try:
+                      with socket.create_connection(("127.0.0.1",8080),timeout=1): pass
+                      break
+                  except OSError: time.sleep(.1)
+              else: raise RuntimeError("server not ready")
+              def request(target,proof,auth=True):
+                  q=dict(protocol="LNZ-WORKER-1",requestId=str(uuid.uuid4()),statement=target,proof=proof,timeoutSeconds=120)
+                  for k in ("statement","proof"):
+                      q[k+"Hash"]=hashlib.sha256(q[k].encode()).hexdigest()
+                  req=urllib.request.Request("http://127.0.0.1:8080/verify",data=json.dumps(q).encode(),headers={"Authorization":"Bearer "+(token if auth else "wrong"),"Content-Type":"application/json"})
+                  try:
+                      with urllib.request.urlopen(req,timeout=150) as r: code,body=r.status,json.load(r)
+                  except urllib.error.HTTPError as r: code,body=r.code,json.load(r)
+                  if code==200:
+                      for k in ("requestId","statementHash","proofHash"): assert body[k]==q[k]
+                  print(json.dumps({"http":code,"receipt":body}))
+                  return code,body
+              t=TARGETS["reverse_append"]
+              assert request(t,"by\n  simp",False)[0]==401
+              assert request(t,"by\n  sorry")[1]["status"]=="REJECTED"
+              assert request("True","by\n  trivial")[1]["status"]=="UNAVAILABLE"
+              code,bad=request(t,"by\n  rfl")
+              assert code==200 and bad["status"]=="REJECTED" and "error:" in bad["diagnostic"]
+              code,good=request(t,"by\n  exact List.reverse_append")
+              assert code==200 and good["status"]=="ACCEPTED"
+              code,false=request(TARGETS["false_control"],"by\n  decide")
+              assert code==200 and false["status"]=="REJECTED" and "error:" in false["diagnostic"]
+              print("REAL_AUTHENTICATED_HTTP_LEAN_BRIDGE_PASS")
+          finally:
+              server.terminate()
+              server.wait(timeout=10)
+          PY
