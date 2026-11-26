@@ -1,0 +1,21 @@
+{$LNZ_WORKER_HOST} {
+    request_body {
+        max_size 160000
+    }
+    @verify {
+        method POST
+        path /verify
+    }
+    handle @verify {
+        reverse_proxy 127.0.0.1:8080 {
+            transport http {
+                dial_timeout 2s
+                response_header_timeout 150s
+                max_conns_per_host 1
+            }
+        }
+    }
+    handle {
+        respond 404
+    }
+}
