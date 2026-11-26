@@ -1,0 +1,15 @@
+name: LNZ worker gateway
+on:
+  push:
+    branches: [research/isolated-lean-worker]
+permissions:
+  contents: read
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s worker -p test_gateway.py -v
