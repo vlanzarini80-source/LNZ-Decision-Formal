@@ -1,0 +1,52 @@
+name: LNZ Lean sandbox probe
+on:
+  push:
+    branches: [research/isolated-lean-worker]
+    paths:
+      - worker/SandboxProbe.lean
+      - .github/workflows/lnz-worker-sandbox.yml
+permissions:
+  contents: read
+jobs:
+  sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Prepare pinned Lean toolchain
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/leanprover/lean4/releases/download/v4.24.0/lean-4.24.0-linux.tar.zst -o "$RUNNER_TEMP/lean.tar.zst"
+          sha256sum "$RUNNER_TEMP/lean.tar.zst"
+          mkdir -p "$RUNNER_TEMP/lean-dist"
+          tar --zstd -xf "$RUNNER_TEMP/lean.tar.zst" -C "$RUNNER_TEMP/lean-dist" --strip-components=1
+          "$RUNNER_TEMP/lean-dist/bin/lean" --version
+      - name: Run controlled sandbox tests
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/lnz-input"
+          cp worker/SandboxProbe.lean "$RUNNER_TEMP/lnz-input/Positive.lean"
+          printf 'import Lean\ntheorem lnz_false : False := by\n  decide\n' > "$RUNNER_TEMP/lnz-input/Negative.lean"
+          chmod -R a+rX "$RUNNER_TEMP/lean-dist" "$RUNNER_TEMP/lnz-input"
+          docker pull ubuntu:24.04
+          image="$(docker image inspect ubuntu:24.04 --format '{{.Id}}')"
+          echo "BASE_IMAGE_ID=$image"
+          run_lean() {
+            local name="lnz-probe-$1"
+            local rc=0
+            timeout --kill-after=5s 120s docker run --name "$name" --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 64 --memory 2g --cpus 2 --user 65534:65534 --tmpfs /tmp:rw,noexec,nosuid,size=64m -v "$RUNNER_TEMP/lean-dist:/opt/lean:ro" -v "$RUNNER_TEMP/lnz-input:/input:ro" "$image" /opt/lean/bin/lean "/input/$1.lean" || rc=$?
+            docker rm -f "$name" >/dev/null 2>&1 || true
+            return "$rc"
+          }
+          run_lean Positive > "$RUNNER_TEMP/positive.log" 2>&1
+          cat "$RUNNER_TEMP/positive.log"
+          python3 -c 'import re,sys; s=open(sys.argv[1]).read(); m=re.fullmatch(r"\s*\x27lnz_reverse_append\x27 (?:does not depend on any axioms|depends on axioms: \[([^\]]*)\])\s*",s); assert m and set(x.strip() for x in (m.group(1) or "").split(",") if x.strip()) <= {"propext","Classical.choice","Quot.sound"},s' "$RUNNER_TEMP/positive.log"
+          rc=0
+          run_lean Negative > "$RUNNER_TEMP/negative.log" 2>&1 || rc=$?
+          cat "$RUNNER_TEMP/negative.log"
+          test "$rc" -eq 1
+          grep -E 'error:.*(decide|False)' "$RUNNER_TEMP/negative.log"
+          sha256sum "$RUNNER_TEMP/lnz-input/"*.lean "$RUNNER_TEMP/"{positive,negative}.log
+          echo CONTROLLED_SANDBOX_PROBE_PASS
