@@ -8,6 +8,7 @@ TARGETS = {
     "reverse_append": "(α : Type) (xs ys : List α) : (xs ++ ys).reverse = ys.reverse ++ xs.reverse",
     "linear_chain": "(a b c : Int) (h₁ : a ≤ b + 2) (h₂ : b ≤ c + 3) : a ≤ c + 5",
     "logic_chain": "(P Q R : Prop) (h₁ : P → Q) (h₂ : Q → R) : P → R",
+    "nat_induction": "(n : Nat) : (List.replicate n true).length = n",
     "false_control": ": False",
 }
 TACTICS = frozenset(("simp", "rfl", "assumption", "decide", "omega", "exact List.reverse_append", "intro", "constructor", "trivial", "apply h₂", "apply h₁"))
@@ -16,7 +17,8 @@ def build(target_id, tactics):
         raise ValueError("unknown target")
     if type(tactics) is not list or not 1 <= len(tactics) <= 16:
         raise ValueError("invalid tactic count")
-    if any(type(t) is not str or t not in TACTICS for t in tactics):
+    generic = re.compile(r"(?:induction|cases|apply|exact|rw) [A-Za-z_][A-Za-z0-9_]*")
+    if any(type(t) is not str or not (t in TACTICS or generic.fullmatch(t)) for t in tactics):
         raise ValueError("unsupported tactic")
     target = TARGETS[target_id]
     source = "import Lean\nset_option autoImplicit false\ntheorem lnz_candidate " + target + " := by\n"
