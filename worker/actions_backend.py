@@ -4,6 +4,7 @@ from pathlib import Path
 from bridge import bridge
 from real_bridge import executor
 from gateway import validate
+from dynamic_proof import TARGETS, context_sha256
 
 def run(raw, execute=executor):
     q=validate(raw)
@@ -11,7 +12,9 @@ def run(raw, execute=executor):
     code, receipt=bridge(raw,"Bearer "+token,token,execute)
     if code != 200:
         raise ValueError("invalid request")
-    return dict(receipt, request_sha256=hashlib.sha256(raw).hexdigest(),
+    matches = [k for k, v in TARGETS.items() if v == q["statement"]]
+    context_hash = context_sha256(matches[0]) if len(matches) == 1 else None
+    return dict(receipt, mathematical_context_sha256=context_hash, request_sha256=hashlib.sha256(raw).hexdigest(),
                 certified=False, backend="github-actions")
 
 if __name__=="__main__":
