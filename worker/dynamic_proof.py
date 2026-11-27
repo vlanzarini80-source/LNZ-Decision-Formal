@@ -6,9 +6,11 @@ import re
 
 TARGETS = {
     "reverse_append": "(α : Type) (xs ys : List α) : (xs ++ ys).reverse = ys.reverse ++ xs.reverse",
+    "linear_chain": "(a b c : Int) (h₁ : a ≤ b + 2) (h₂ : b ≤ c + 3) : a ≤ c + 5",
+    "logic_chain": "(P Q R : Prop) (h₁ : P → Q) (h₂ : Q → R) : P → R",
     "false_control": ": False",
 }
-TACTICS = frozenset(("simp", "rfl", "assumption", "decide", "omega", "exact List.reverse_append", "intro", "constructor", "trivial"))
+TACTICS = frozenset(("simp", "rfl", "assumption", "decide", "omega", "exact List.reverse_append", "intro", "constructor", "trivial", "apply h₂", "apply h₁"))
 def build(target_id, tactics):
     if type(target_id) is not str or target_id not in TARGETS:
         raise ValueError("unknown target")
