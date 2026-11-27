@@ -13,6 +13,15 @@ TARGETS = {
     "false_control": ": False",
 }
 TACTICS = frozenset(("simp", "rfl", "assumption", "decide", "omega", "exact List.reverse_append", "intro", "constructor", "trivial", "apply h₂", "apply h₁"))
+def mathematical_context(target_id):
+    source = "import Lean\nset_option autoImplicit false\n"
+    if target_id == "recursive_double":
+        source += "def lnzDouble : Nat → Nat\n  | 0 => 0\n  | n+1 => lnzDouble n + 2\n"
+    return source + "theorem lnz_candidate " + TARGETS[target_id] + " := by\n"
+
+def context_sha256(target_id):
+    return hashlib.sha256(mathematical_context(target_id).encode("utf8")).hexdigest()
+
 def build(target_id, tactics):
     if type(target_id) is not str or target_id not in TARGETS:
         raise ValueError("unknown target")
@@ -22,10 +31,7 @@ def build(target_id, tactics):
     if any(type(t) is not str or not (t in TACTICS or generic.fullmatch(t)) for t in tactics):
         raise ValueError("unsupported tactic")
     target = TARGETS[target_id]
-    source = "import Lean\nset_option autoImplicit false\n"
-    if target_id == "recursive_double":
-        source += "def lnzDouble : Nat → Nat\n  | 0 => 0\n  | n+1 => lnzDouble n + 2\n"
-    source += "theorem lnz_candidate " + target + " := by\n"
+    source = mathematical_context(target_id)
     source += "".join("  " + t + "\n" for t in tactics)
     source += "#print axioms lnz_candidate\n"
     return source, hashlib.sha256(target.encode()).hexdigest()
