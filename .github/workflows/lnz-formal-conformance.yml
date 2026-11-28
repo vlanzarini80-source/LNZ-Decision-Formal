@@ -25,3 +25,14 @@ jobs:
           node --experimental-strip-types core/formal-conformance.mts reference.csv
           sha256sum reference.csv
           node --experimental-strip-types core/transition-safety-audit.mts
+          "$lean" -o formal/TrustedEvidencePolicy.olean formal/TrustedEvidencePolicy.lean > trusted-axioms.log
+          "$lean" --run formal/TrustedConformance.lean > trusted-reference.csv
+          node --experimental-strip-types core/trusted-conformance.mts trusted-reference.csv
+          sha256sum trusted-reference.csv
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: trusted-policy-reference
+          path: |
+            trusted-reference.csv
+            trusted-axioms.log
+          retention-days: 30
