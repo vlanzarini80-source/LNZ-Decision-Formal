@@ -30,6 +30,8 @@ def build(target_id, tactics):
     generic = re.compile(r"(?:(?:induction|cases|apply|exact|rw) [A-Za-z_][A-Za-z0-9_]*|all_goals (?:simp|omega|rfl|assumption)|simp \[[A-Za-z_][A-Za-z0-9_]*\])")
     if any(type(t) is not str or not (t in TACTICS or generic.fullmatch(t)) for t in tactics):
         raise ValueError("unsupported tactic")
+    if any(re.search(r'\b(?:sorry|sorryAx|admit)\b', t) for t in tactics):
+        raise ValueError("forbidden placeholder")
     target = TARGETS[target_id]
     source = mathematical_context(target_id)
     source += "".join("  " + t + "\n" for t in tactics)
@@ -39,3 +41,12 @@ def build(target_id, tactics):
 def audit(log):
     m = re.fullmatch(r"\s*'lnz_candidate' (?:does not depend on any axioms|depends on axioms: \[([^\]]*)\])\s*", log)
     return bool(m and set(x.strip() for x in (m.group(1) or "").split(",") if x.strip()) <= {"propext", "Classical.choice", "Quot.sound"})
+
+
+def forbidden_axioms(log):
+    # Only classify a uniquely identified axiom report; ambiguous output fails closed.
+    reports = re.findall(r"^'lnz_candidate' depends on axioms: \[([^\]\n]*)\]\s*$", log, re.MULTILINE)
+    if len(reports) != 1:
+        return False
+    names = {x.strip() for x in reports[0].split(",") if x.strip()}
+    return bool(names - {"propext", "Classical.choice", "Quot.sound"})
