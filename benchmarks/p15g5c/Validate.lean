@@ -84,7 +84,7 @@ theorem negative_counterexample : ¬ negative 2 2 := by
   have he := h.2.2
   have hn : euclid 2 2 ≠ 1 := by
     rw [euclid]
-    simp only [Nat.reduceEq, dif_neg, Nat.reduceMod]
+    simp only [dif_neg (by decide : (2 : Nat) ≠ 0), Nat.reduceMod]
     rw [euclid]
     decide
   exact hn he
