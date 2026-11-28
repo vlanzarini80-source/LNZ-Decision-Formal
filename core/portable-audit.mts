@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {searchProofPlan} from './search.ts';
+import {feedbackLoop} from './feedback.ts';
+import {validateDecomposition} from './decomposition.ts';
+import {initialResearch,advanceResearch} from './research-state.ts';
+let calls=0;
+const plan=await searchProofPlan('root',async g=>{calls++;return g==='root'?[{id:'cycle',goals:['root']},{id:'branch',goals:['a','b']}]:[{id:'leaf',goals:[]}]},4);
+assert.equal(plan.plan?.alternative,'branch');assert.equal(calls,3);assert.equal(plan.certified,false);
+const exhausted=await searchProofPlan('root',async()=>{throw Error('unexpected call')},0);assert.equal(exhausted.spent,0);
+let n=0;const feedback=await feedbackLoop('synthetic',2,async(statement,d)=>{n++;assert.equal(d.length,n-1);return {statement,proof:'candidate'+n}},async r=>({...r,status:n===1?'REJECTED':'ACCEPTED',diagnostic:'synthetic'}));
+assert.equal(feedback.status,'RUNNER_ACCEPTANCE_UNATTESTED');assert.equal(feedback.certified,false);assert.equal(n,2);
+const tampered=await feedbackLoop('synthetic',1,async statement=>({statement,proof:'candidate'}),async r=>({...r,proofHash:'wrong',status:'ACCEPTED',diagnostic:''}));assert.equal(tampered.status,'RECEIPT_REJECTED');
+assert.throws(()=>validateDecomposition('root',[{id:'r',statement:'root',dependsOn:['r']}],'r'),/CYCLIC_DEPENDENCY/);
+assert.equal(validateDecomposition('root',[{id:'r',statement:'root',dependsOn:[]}],'r').certified,false);
+assert.equal(advanceResearch(initialResearch(1,0),{kind:'timeout'},1).reason,'TIMEOUT');
+console.log('11 assertions passed; synthetic adapters only');
