@@ -25,7 +25,7 @@ export async function runPortable(runId:string,statement:string,adapters:Runtime
  }
  await record('START',{statement,provider:adapters.provider.id,verifier:adapters.verifier.id});
  try{
- const plan=await searchProofPlan(statement,g=>invoke('provider',()=>adapters.provider.expand(g,signal)),start.limits.provider,12);
+ const plan=await searchProofPlan(statement,g=>invoke('provider',()=>adapters.provider.expand(g,signal)),Math.max(0,start.limits.provider-Math.min(2,start.limits.verifier)),12);
  await record('PLAN',plan);
  if(plan.plan){
  const nodes:{id:string;statement:string;dependsOn:string[]}[]=[];
@@ -37,7 +37,7 @@ export async function runPortable(runId:string,statement:string,adapters:Runtime
  if(budget<1){await record('STOP',{reason:'BUDGET_EXHAUSTED'});return {status:'BUDGET_EXHAUSTED',certified:false}}
  let state=initialResearch(budget,Date.now());state.deadline=start.deadline;
  while(state.phase==='READY'){
- const c=await invoke('provider',()=>adapters.provider.propose(statement,Object.freeze([...state.diagnostics]),signal));
+ const c=await invoke('provider',()=>adapters.provider.propose(statement,Object.freeze([...state.diagnostics]),signal,Object.freeze([...state.proofs])));
  if(c.statement!==statement)throw Error('STATEMENT_MISMATCH');
  state=advanceResearch(state,{kind:'candidate',proof:c.proof},Date.now());
  if(state.phase!=='WAITING')break;
