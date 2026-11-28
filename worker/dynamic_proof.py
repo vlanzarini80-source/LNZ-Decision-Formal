@@ -3,6 +3,7 @@ Not an arbitrary Lean parser or production sandbox.
 """
 import hashlib
 import re
+from benchmark_targets import BENCHMARK_TARGETS, BENCHMARK_DEFINITIONS
 
 TARGETS = {
     "reverse_append": "(α : Type) (xs ys : List α) : (xs ++ ys).reverse = ys.reverse ++ xs.reverse",
@@ -12,11 +13,14 @@ TARGETS = {
     "recursive_double": "(n : Nat) : lnzDouble n = n + n",
     "false_control": ": False",
 }
+TARGETS.update(BENCHMARK_TARGETS)
 TACTICS = frozenset(("simp", "rfl", "assumption", "decide", "omega", "exact List.reverse_append", "intro", "constructor", "trivial", "apply h₂", "apply h₁"))
 def mathematical_context(target_id):
     source = "import Lean\nset_option autoImplicit false\n"
     if target_id == "recursive_double":
         source += "def lnzDouble : Nat → Nat\n  | 0 => 0\n  | n+1 => lnzDouble n + 2\n"
+    if target_id in BENCHMARK_DEFINITIONS and BENCHMARK_DEFINITIONS[target_id]:
+        source += BENCHMARK_DEFINITIONS[target_id] + "\n"
     return source + "theorem lnz_candidate " + TARGETS[target_id] + " := by\n"
 
 def context_sha256(target_id):
