@@ -18,6 +18,7 @@ jobs:
           ./lean-4.24.0-linux/bin/lean --version
           ./lean-4.24.0-linux/bin/lean formal/DecisionSafety.lean | tee safety.log
           ./lean-4.24.0-linux/bin/lean formal/EvidenceBridge.lean | tee -a safety.log
+          ./lean-4.24.0-linux/bin/lean formal/TransitionSafety.lean | tee -a safety.log
           python3 - <<'PY'
           import re
           s=open('safety.log').read()
@@ -28,6 +29,10 @@ jobs:
               assert set(filter(None,(m.group(2) or '').split(', '))) <= {'propext','Classical.choice','Quot.sound'},n
           for n in ['accepted_unattested','rejected_insufficient','reserve_bounded','reserve_exhausted','reserve_increments']:
               m=re.search(r"'LNZBridge\."+n+r"' (does not depend on any axioms|depends on axioms: \[([^\]]*)\])",s)
+              assert m,n
+              assert set(filter(None,(m.group(2) or '').split(', '))) <= {'propext','Classical.choice','Quot.sound'},n
+          for n in ['terminal_absorbing','deadline_stops','accepted_stops','invalid_stops']:
+              m=re.search(r"'LNZTransition\."+n+r"' (does not depend on any axioms|depends on axioms: \[([^\]]*)\])",s)
               assert m,n
               assert set(filter(None,(m.group(2) or '').split(', '))) <= {'propext','Classical.choice','Quot.sound'},n
           assert not re.search(r'\b(?:sorryAx|sorry|admit)\b',s)
