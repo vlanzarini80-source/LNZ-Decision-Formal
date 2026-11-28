@@ -34,6 +34,7 @@ jobs:
           node --experimental-strip-types signed-worker/verify-audit.mts
           export LNZ_EXPECTED_VERSION="$($LNZ_LEAN_DIST/bin/lean --version)"
           node --experimental-strip-types signed-worker/registry-audit.mts
+          node --experimental-strip-types signed-worker/runtime-audit.mts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -42,4 +43,5 @@ jobs:
             signed-rfl.json
             signed-simp.json
             worker-public.pem
+            runtime-audit-evidence.json
           retention-days: 30
