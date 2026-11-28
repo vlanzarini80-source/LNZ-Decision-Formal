@@ -6,6 +6,7 @@ def sumNat : Nat → Nat | 0 => 0 | n+1 => sumNat n + (n+1)
 def positive (n : Nat) : Prop := 2 * sumNat n = n * (n+1)
 def negative (n : Nat) : Prop := 2 * sumNat n = n * (n+1) + 1
 theorem negative_counterexample : ¬ negative 0 := by
+  unfold negative
   decide
 #print axioms negative_counterexample
 end B01
@@ -15,6 +16,7 @@ def sumOdd : Nat → Nat | 0 => 0 | n+1 => sumOdd n + (2*n+1)
 def positive (n : Nat) : Prop := sumOdd n = n*n
 def negative (n : Nat) : Prop := sumOdd n = n*n+1
 theorem negative_counterexample : ¬ negative 0 := by
+  unfold negative
   decide
 #print axioms negative_counterexample
 end B02
@@ -24,6 +26,7 @@ def sumCube : Nat → Nat | 0 => 0 | n+1 => sumCube n + (n+1)^3
 def positive (n : Nat) : Prop := 4 * sumCube n = (n*(n+1))^2
 def negative (n : Nat) : Prop := 4 * sumCube n = (n*(n+1))^2+1
 theorem negative_counterexample : ¬ negative 0 := by
+  unfold negative
   decide
 #print axioms negative_counterexample
 end B03
@@ -33,6 +36,7 @@ def fact : Nat → Nat | 0 => 1 | n+1 => (n+1)*fact n
 def positive (n : Nat) : Prop := 4 ≤ n → 2^n < fact n
 def negative (n : Nat) : Prop := 3 ≤ n → 2^n < fact n
 theorem negative_counterexample : ¬ negative 3 := by
+  unfold negative
   decide
 #print axioms negative_counterexample
 end B04
@@ -42,6 +46,7 @@ def revAcc : List Nat → List Nat → List Nat | [], a => a | x::xs, a => revAc
 def positive (xs : List Nat) : Prop := revAcc xs [] = xs.reverse
 def negative (xs : List Nat) : Prop := revAcc xs [] = xs
 theorem negative_counterexample : ¬ negative [0,1] := by
+  unfold negative
   decide
 #print axioms negative_counterexample
 end B05
@@ -51,6 +56,7 @@ def fib : Nat → Nat | 0 => 0 | 1 => 1 | n+2 => fib (n+1) + fib n
 def positive (n : Nat) : Prop := Nat.gcd (fib n) (fib (n+1)) = 1
 def negative (n : Nat) : Prop := Nat.gcd (fib n) (fib (n+1)) = 2
 theorem negative_counterexample : ¬ negative 0 := by
+  unfold negative
   decide
 #print axioms negative_counterexample
 end B06
@@ -76,7 +82,11 @@ def negative (a b : Nat) : Prop := euclid a b ∣ a ∧ euclid a b ∣ b ∧ euc
 theorem negative_counterexample : ¬ negative 2 2 := by
   intro h
   have he := h.2.2
-  have hn : euclid 2 2 ≠ 1 := by decide
+  have hn : euclid 2 2 ≠ 1 := by
+    rw [euclid]
+    simp only [Nat.reduceEq, dif_neg, Nat.reduceMod]
+    rw [euclid]
+    decide
   exact hn he
 #print axioms negative_counterexample
 end B08
