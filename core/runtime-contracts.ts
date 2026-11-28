@@ -3,7 +3,7 @@ export interface Budget {maxProviderCalls:number;maxVerifierCalls:number;maxLemm
 export interface Provider {
  readonly id:string;
  expand(goal:string,signal:AbortSignal):Promise<Alternative[]>;
- propose(statement:string,diagnostics:readonly string[],signal:AbortSignal):Promise<{statement:string;proof:string}>;
+ propose(statement:string,diagnostics:readonly string[],signal:AbortSignal,previousProofs?:readonly string[]):Promise<{statement:string;proof:string}>;
 }
 export interface VerificationRequest {statement:string;statementHash:string;proof:string;proofHash:string}
 export interface Verifier {
