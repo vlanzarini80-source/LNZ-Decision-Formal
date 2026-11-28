@@ -4,7 +4,9 @@ export type Evidence={worker:string;requestId:string;statementHash:string;proofH
 export function payload(e:Evidence){return Buffer.from(JSON.stringify(['LNZ-EVIDENCE-1',e.worker,e.requestId,e.statementHash,e.proofHash,e.contextHash,e.status,e.diagnostic]));}
 export class EvidenceRegistry{
  private db:DatabaseSync;
- constructor(path:string,private keys:ReadonlyMap<string,string>){
+ private keys:ReadonlyMap<string,string>;
+ constructor(path:string,keys:ReadonlyMap<string,string>){
+ this.keys=new Map(keys);
  this.db=new DatabaseSync(path);
  this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS evidence(request_id TEXT PRIMARY KEY,body TEXT NOT NULL,signature TEXT NOT NULL); CREATE TABLE IF NOT EXISTS quarantine(id INTEGER PRIMARY KEY,reason TEXT NOT NULL,body TEXT NOT NULL);');
  }
