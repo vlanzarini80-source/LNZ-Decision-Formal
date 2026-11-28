@@ -37,6 +37,7 @@ jobs:
           node --experimental-strip-types signed-worker/runtime-audit.mts
           PYTHONPATH="$PWD/worker" python3 signed-worker/dynamic-audit.py
           node --experimental-strip-types signed-worker/lemma-research-audit.mts
+          PYTHONPATH="$PWD/worker" python3 signed-worker/composition-audit.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -48,4 +49,5 @@ jobs:
             runtime-audit-evidence.json
             dynamic-audit-evidence.json
             lemma-research-evidence.json
+            composition-audit-evidence.json
           retention-days: 30
