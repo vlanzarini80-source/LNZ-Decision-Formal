@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {initialBudget,claim,complete} from './budget.ts';
+let state=initialBudget({provider:1,verifier:1,lemma:1},100);
+const events=new Set<string>();
+const store={async load(){return structuredClone(state)},async compareAndAppend(_run:string,revision:number,next:typeof state,event:{id:string;kind:string}){const key=event.id+':'+event.kind;if(state.revision!==revision||events.has(key))return false;events.add(key);state=structuredClone(next);return true}};
+const results=await Promise.allSettled(Array.from({length:8},(_,i)=>claim(store,'r','provider','p'+i,1)));
+assert.equal(results.filter(x=>x.status==='fulfilled').length,1);
+assert.equal(state.used.provider,1);
+await assert.rejects(claim(store,'r','verifier','v',2),/INTERRUPTED_OR_BUSY/);
+await assert.rejects(complete(store,'r','wrong',{}),/RESERVATION_MISMATCH/);
+await complete(store,'r',state.pending!.id,{});
+await assert.rejects(claim(store,'r','provider','new',3),/EXHAUSTED/);
+await assert.rejects(claim(store,'r','verifier','v',100),/DEADLINE/);
+await claim(store,'r','lemma','l',4);await complete(store,'r','l',{});
+await claim(store,'r','verifier','v',5);await complete(store,'r','v',{});
+assert.deepEqual(state.used,{provider:1,verifier:1,lemma:1});
+assert.equal(events.size,6);
+console.log('8 assertions passed; in-memory CAS adapter, not durable storage');
