@@ -1,3 +1,4 @@
+import {decideEvidence} from './trusted-policy.ts';
 import {createHash,createPublicKey,verify} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 const sha=(x:string|Buffer)=>createHash('sha256').update(x).digest('hex');
@@ -27,6 +28,7 @@ export class TrustedReceiptStore{
  if(e.status==='REJECTED'&&e.exitCode===0&&!e.axioms?.includes('sorryAx'))return reject('RESULT');
  const r=this.db.prepare('INSERT INTO trusted_receipts VALUES(?,?,?) ON CONFLICT(id) DO NOTHING').run(b.requestId,x.payload,x.signature);
  if(Number(r.changes)!==1)return reject('REPLAY_OR_CONFLICT');
+ if(e.status==='ACCEPTED'&&decideEvidence({signature:true,context:true,worker:true,fresh:Number(r.changes)===1,compiled:e.exitCode===0,axioms:Array.isArray(e.axioms)&&e.axioms.every((a:unknown)=>['propext','Classical.choice','Quot.sound'].includes(a as string)),attested:false,sufficient:false})!=='ABSTAIN')return reject('POLICY');
  return {statementHash:b.statementHash,proofHash:b.proofHash,status:e.status as 'ACCEPTED'|'REJECTED'|'UNAVAILABLE',diagnostic:e.diagnostic as string,certified:false as const};
  }
  close(){this.db.close()}
