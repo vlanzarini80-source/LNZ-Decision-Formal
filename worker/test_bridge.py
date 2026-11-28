@@ -18,7 +18,7 @@ class BridgeTests(unittest.TestCase):
     def test_diagnostic(self):
         self.assertEqual(self.call(lambda s,t:(1,"error: unsolved goals"))[1]["diagnostic"],"error: unsolved goals")
     def test_axiom(self):
-        self.assertEqual(self.call(lambda s,t:(0,"'lnz_candidate' depends on axioms: [sorryAx]"))[1]["status"],"UNAVAILABLE")
+        self.assertEqual(self.call(lambda s,t:(0,"'lnz_candidate' depends on axioms: [sorryAx]"))[1]["status"],"REJECTED")
     def test_auth(self):
         self.assertEqual(self.call(lambda s,t:self.fail("execution"),auth=False)[0],401)
     def test_target(self):
@@ -27,3 +27,11 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.call(lambda s,t:self.fail("execution"),proof="by\n  sorry")[1]["status"],"REJECTED")
     def test_failure(self):
         self.assertEqual(self.call(lambda s,t:(124,"timeout"))[1]["status"],"UNAVAILABLE")
+
+    def test_exact_sorry(self):
+        for tactic in ("exact sorry", "exact sorryAx", "exact admit"):
+            self.assertEqual(self.call(lambda s,t:self.fail("execution"),proof="by\n  "+tactic)[1]["status"],"REJECTED")
+    def test_axiom_warning(self):
+        self.assertEqual(self.call(lambda s,t:(0,"warning: declaration uses 'sorry'\n'lnz_candidate' depends on axioms: [sorryAx]\n"))[1]["status"],"REJECTED")
+    def test_unknown_audit(self):
+        self.assertEqual(self.call(lambda s,t:(0,"unparseable audit"))[1]["status"],"UNAVAILABLE")
