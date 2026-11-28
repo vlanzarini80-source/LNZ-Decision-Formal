@@ -1,0 +1,26 @@
+name: LNZ Formal Conformance
+on:
+  push:
+    branches: [research/lnz-portable-core]
+    paths: ['formal/**', 'core/**', '.github/workflows/lnz-formal-conformance.yml']
+permissions:
+  contents: read
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - run: |
+          set -euo pipefail
+          curl -fL --retry 3 https://github.com/leanprover/lean4/releases/download/v4.24.0/lean-4.24.0-linux.tar.zst -o lean.tar.zst
+          tar --zstd -xf lean.tar.zst
+          export LEAN_PATH="$PWD/formal"
+          lean="$PWD/lean-4.24.0-linux/bin/lean"
+          "$lean" -o formal/EvidenceBridge.olean formal/EvidenceBridge.lean
+          "$lean" --run formal/Conformance.lean > reference.csv
+          node --experimental-strip-types core/formal-conformance.mts reference.csv
+          sha256sum reference.csv
