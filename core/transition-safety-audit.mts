@@ -1,3 +1,4 @@
+import {inspectRecovery} from './crash-recovery.ts';
 import assert from 'node:assert/strict';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -29,6 +30,7 @@ if(process.argv[2]==='child'){
  assert.equal(child.signal,'SIGKILL');
  db=new SQLiteBudgetStore(path);
  assert.equal((await db.load('r')).pending?.id,'interrupted');
+ const recovery=await inspectRecovery(db,'r',2);assert.equal(recovery.status,'RECONCILIATION_REQUIRED');assert.equal(recovery.automaticRetry,false);assert.equal(recovery.certified,false);
  assert.equal((await db.load('r')).used.provider,1);
  assert.equal(db.events('r').length,1);
  await assert.rejects(claim(db,'r','provider','retry',2),/INTERRUPTED_OR_BUSY/);
