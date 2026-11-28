@@ -24,3 +24,4 @@ jobs:
           "$lean" --run formal/Conformance.lean > reference.csv
           node --experimental-strip-types core/formal-conformance.mts reference.csv
           sha256sum reference.csv
+          node --experimental-strip-types core/transition-safety-audit.mts
