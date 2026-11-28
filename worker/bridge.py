@@ -1,7 +1,7 @@
 """Restricted bridge; executor is a trusted server-side dependency."""
 import hashlib
 from gateway import dispatch, validate
-from dynamic_proof import TARGETS, build, audit
+from dynamic_proof import TARGETS, build, audit, forbidden_axioms
 
 def bridge(raw, authorization, token, execute):
     code, response = dispatch(raw, authorization, token)
@@ -28,6 +28,8 @@ def bridge(raw, authorization, token, execute):
             return result("UNAVAILABLE", "Invalid executor result")
         if rc == 0 and audit(log):
             return result("ACCEPTED", log)
+        if rc == 0 and forbidden_axioms(log):
+            return result("REJECTED", log)
         if rc == 1 and "error:" in log:
             return result("REJECTED", log)
         return result("UNAVAILABLE", "Execution or axiom audit failed")
