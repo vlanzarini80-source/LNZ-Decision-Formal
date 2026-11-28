@@ -1,0 +1,30 @@
+name: LNZ Decision Safety
+on:
+  push:
+    branches: [research/lnz-portable-core]
+    paths: ['formal/**', '.github/workflows/lnz-decision-safety.yml']
+permissions:
+  contents: read
+jobs:
+  safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: |
+          set -euo pipefail
+          curl -fL --retry 3 https://github.com/leanprover/lean4/releases/download/v4.24.0/lean-4.24.0-linux.tar.zst -o lean.tar.zst
+          tar --zstd -xf lean.tar.zst
+          ./lean-4.24.0-linux/bin/lean --version
+          ./lean-4.24.0-linux/bin/lean formal/DecisionSafety.lean | tee safety.log
+          python3 - <<'PY'
+          import re
+          s=open('safety.log').read()
+          names=['proven_sound','disproven_sound','absent_abstains','exhausted_abstains','unavailable_abstains','conflicting_evidence']
+          for n in names:
+              m=re.search(r"'LNZ\."+n+r"' (does not depend on any axioms|depends on axioms: \[([^\]]*)\])",s)
+              assert m,n
+              assert set(filter(None,(m.group(2) or '').split(', '))) <= {'propext','Classical.choice','Quot.sound'},n
+          assert not re.search(r'\b(?:sorryAx|sorry|admit)\b',s)
+          print('DECISION_SAFETY_AXIOM_AUDIT_PASS')
+          PY
