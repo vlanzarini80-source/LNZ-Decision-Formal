@@ -1,0 +1,33 @@
+name: LNZ benchmark formal validation
+on:
+  push:
+    branches: [research/isolated-lean-worker]
+    paths: ['benchmarks/p15g5c/Validate.lean', '.github/workflows/lnz-benchmark-validation.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Lean 4.24.0
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/leanprover/lean4/releases/download/v4.24.0/lean-4.24.0-linux.tar.zst -o "$RUNNER_TEMP/lean.tar.zst"
+          mkdir -p "$RUNNER_TEMP/lean"
+          tar --zstd -xf "$RUNNER_TEMP/lean.tar.zst" -C "$RUNNER_TEMP/lean" --strip-components=1
+          "$RUNNER_TEMP/lean/bin/lean" --version
+          "$RUNNER_TEMP/lean/bin/lean" benchmarks/p15g5c/Validate.lean | tee validation.log
+          python3 - <<'PY'
+          import re
+          log=open('validation.log').read()
+          reports=re.findall(r"^'B(\d\d)\.negative_counterexample' (?:does not depend on any axioms|depends on axioms: \[([^\]]*)\])$",log,re.M)
+          assert sorted(i for i,_ in reports)==[f'{i:02}' for i in range(1,11)], reports
+          for _,a in reports:
+              assert set(filter(None,map(str.strip,a.split(',')))) <= {'propext','Classical.choice','Quot.sound'}, a
+          print('BENCHMARK_NEGATIVE_VALIDATION_PASS')
+          PY
