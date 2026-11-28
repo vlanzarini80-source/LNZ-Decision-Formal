@@ -12,6 +12,7 @@ export function leanAdapter(endpoint:string,token:string,timeoutSeconds=120):Ver
  if(!r.ok)throw Error('WORKER_HTTP_'+r.status);
  const raw=await r.text();if(raw.length>64000)throw Error('RECEIPT_LIMIT');
  const x=JSON.parse(raw);
+ if(!x||typeof x!=='object'||Array.isArray(x)||x.certified===true)throw Error('INVALID_RECEIPT');
  if(x.protocol!==protocol||x.requestId!==requestId||x.statementHash!==q.statementHash||x.proofHash!==q.proofHash||!['ACCEPTED','REJECTED','UNAVAILABLE'].includes(x.status)||typeof x.diagnostic!=='string'||x.diagnostic.length>8000)throw Error('INVALID_RECEIPT');
  return {statementHash:x.statementHash,proofHash:x.proofHash,status:x.status,diagnostic:x.diagnostic};
  }};
