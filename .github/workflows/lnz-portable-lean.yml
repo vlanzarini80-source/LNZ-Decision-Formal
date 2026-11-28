@@ -1,0 +1,40 @@
+name: LNZ Portable Lean Adapter
+on:
+  push:
+    branches: [research/lnz-portable-core]
+    paths: ['core/lean-adapter*', '.github/workflows/lnz-portable-lean.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-lean:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Fetch pinned worker and Lean
+        run: |
+          set -euo pipefail
+          git fetch origin 543677c0b72e9653704eb5affdbd7d06410c5ba2
+          git archive FETCH_HEAD worker | tar -x
+          curl -fL --retry 3 https://github.com/leanprover/lean4/releases/download/v4.24.0/lean-4.24.0-linux.tar.zst -o lean.tar.zst
+          tar --zstd -xf lean.tar.zst
+          docker pull ubuntu:24.04
+      - name: Run real adapter controls
+        run: |
+          set -euo pipefail
+          export LNZ_LEAN_DIST="$PWD/lean-4.24.0-linux"
+          "$LNZ_LEAN_DIST/bin/lean" --version
+          export LNZ_IMAGE_ID="$(docker image inspect ubuntu:24.04 --format '{{.Id}}')"
+          export LNZ_LEAN_WORKER_TOKEN="$(python3 -c 'import secrets;print(secrets.token_hex(32))')"
+          python3 worker/real_bridge.py > worker.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; cat worker.log' EXIT
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:8080/verify; then break; fi
+            sleep 1
+          done
+          node --experimental-strip-types core/lean-adapter-audit.mts
