@@ -1,0 +1,43 @@
+name: LNZ Signed Worker
+on:
+  push:
+    branches: [research/lnz-portable-core]
+    paths: ['signed-worker/**', '.github/workflows/lnz-signed-worker.yml']
+permissions:
+  contents: read
+jobs:
+  signed-lean:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - run: |
+          set -euo pipefail
+          export LNZ_WORKER_COMMIT=543677c0b72e9653704eb5affdbd7d06410c5ba2
+          git fetch origin "$LNZ_WORKER_COMMIT"
+          git archive "$LNZ_WORKER_COMMIT" worker | tar -x
+          curl -fL --retry 3 https://github.com/leanprover/lean4/releases/download/v4.24.0/lean-4.24.0-linux.tar.zst -o lean.tar.zst
+          tar --zstd -xf lean.tar.zst
+          export LNZ_LEAN_DIST="$PWD/lean-4.24.0-linux"
+          docker pull ubuntu:24.04
+          export LNZ_IMAGE_ID="$(docker image inspect ubuntu:24.04 --format '{{.Id}}')"
+          export LNZ_LEAN_WORKER_TOKEN="$(python3 -c 'import secrets;print(secrets.token_hex(32))')"
+          export LNZ_SIGNING_KEY="$(mktemp)"
+          trap 'rm -f "$LNZ_SIGNING_KEY"' EXIT
+          chmod 600 "$LNZ_SIGNING_KEY"
+          openssl genpkey -algorithm ED25519 -out "$LNZ_SIGNING_KEY"
+          openssl pkey -in "$LNZ_SIGNING_KEY" -pubout -out worker-public.pem
+          PYTHONPATH="$PWD/worker" python3 signed-worker/audit.py
+          node --experimental-strip-types signed-worker/verify-audit.mts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: signed-lean-evidence
+          path: |
+            signed-rfl.json
+            signed-simp.json
+            worker-public.pem
+          retention-days: 30
